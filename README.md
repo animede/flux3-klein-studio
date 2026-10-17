@@ -8,8 +8,8 @@ FLUX 3 Image Kleinをローカルで使う画像生成アプリです。T2I、I2
 ## 起動
 
 ```bash
-git clone git@github.com:animede/flux-klein-studio.git
-cd flux-klein-studio
+git clone https://github.com/animede/flux3-klein-studio.git
+cd flux3-klein-studio
 ./setup.sh flux3 --acknowledge-flux3-license
 CUDA_VISIBLE_DEVICES=0 ./run.sh
 ```
