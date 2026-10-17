@@ -50,3 +50,33 @@ MODELS = {
 }
 
 DEFAULT_MODEL = "flux3"
+
+# Official prompt upsampler (flux-3-image-klein-pup, Qwen3.5-9B, Apache-2.0) for local use. Optional;
+# `download_models.py flux3 --pup int8|gguf|all` fetches them. Both need a large GPU (see upsampler.py).
+PUP_CONFIG_DIR = ROOT / "models" / "flux-3-image-klein-pup"
+PUP_MODELS = {
+    # Config, tokenizer and processor files only; the INT8 weights come from the Comfy repository.
+    "config": {
+        "repo": "black-forest-labs/flux-3-image-klein-pup",
+        "revision": "3f3edb52b2c55de0d49feab28598b68f7f8e4830",
+        "dir": PUP_CONFIG_DIR,
+        "patterns": ["*.json", "*.jinja", "README.md"],
+    },
+    # Official INT8 ConvRot build from the Comfy distribution (same pinned revision as the DiT).
+    "int8": {
+        "repo": "black-forest-labs/flux-3-image-klein-comfy",
+        "revision": MODELS["flux3"]["int8_revision"],
+        "file": "text_encoders/qwen3.5_9b_flux3_prompt_upsampler_int8_convrot.safetensors",
+        "dir": MODELS["flux3"]["int8_dir"],
+    },
+    # Community GGUF (Q4_K_M + vision mmproj) for llama.cpp.
+    "gguf": {
+        "repo": "rekuen/flux-3-image-klein-pup-GGUF",
+        "revision": "4dc05841418c455df85470d3befae8d270d880d4",
+        "files": ["flux-3-image-klein-pup-Q4_K_M.gguf", "mmproj-flux-3-image-klein-pup-F16.gguf"],
+        "dir": ROOT / "models" / "flux-3-image-klein-pup-gguf",
+    },
+}
+PUP_INT8_PATH = PUP_MODELS["int8"]["dir"] / PUP_MODELS["int8"]["file"]
+PUP_GGUF_PATH = PUP_MODELS["gguf"]["dir"] / PUP_MODELS["gguf"]["files"][0]
+PUP_MMPROJ_PATH = PUP_MODELS["gguf"]["dir"] / PUP_MODELS["gguf"]["files"][1]

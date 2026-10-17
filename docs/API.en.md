@@ -44,6 +44,7 @@ The request is `multipart/form-data`.
 | `boxes` | No | Empty string | JSON array in 0–1000 coordinates, up to 32 entries. Placement is `{id, bbox, desc}`; editing is `{id, from, src_bbox, tgt_bbox, desc}` (`tgt_bbox: null` deletes). Coordinates are `[top, left, bottom, right]` |
 | `upsample` | No | `true` | Prompt upsampler: expands the prompt into a full caption before generating (same processing as `/api/enhance-prompt`). `false` bypasses it (for comparison, or when sending an already-expanded caption) |
 | `upsample_strict` | No | `false` | `true` stops generation when upsampling is unavailable (by default it generates with the original prompt and adds a `warning`) |
+| `upsampler` | No | `KLEIN_UPSAMPLER` (default `auto`) | LLM to use: `auto`, `remote`, `local`, `pup-int8`, `pup-gguf` (see "Prompt upsampler" below) |
 
 Omitting reference images gives T2I; one or more gives I2I / Ref2I. PNG, JPEG, and WebP are recommended. Reference images are downscaled automatically based on count and model to limit VRAM usage.
 
@@ -61,11 +62,18 @@ Following the model card format, `boxes` is appended after the caption as a JSON
 | `mode` | No | `auto` | `auto` (`t2i`/`i2i` depending on whether reference images are given), `t2i`, `i2i`, `t2i_bbox`, `i2i_bbox` |
 | `image` | No | None | Reference images for editing (up to 8). Shown to the LLM in order |
 | `width` / `height` | No | None | Tells the LLM the output aspect ratio for T2I |
+| `upsampler` | No | `KLEIN_UPSAMPLER` (default `auto`) | LLM to use (table below) |
 
-The LLM writes the caption using BFL's official system prompts (`models/flux-3-image-klein-pup/system_prompts.json`, fetched automatically if missing). For edits, reference images are passed before the request text. The following are tried in order; if none is available, `503` is returned with the reason.
+The LLM writes the caption using BFL's official system prompts (`models/flux-3-image-klein-pup/system_prompts.json`, fetched automatically if missing) and the official input format. For edits, reference images are passed before the request text. If no LLM is available, `503` is returned with the reason.
 
-1. LLM servers (`KLEIN_PROMPT_LLM_URLS`, a comma-separated list of OpenAI-compatible URLs tried in order. If unset, no LLM server is used)
-2. Local gemma-4-E4B (llama.cpp). Runs on GPU if enough VRAM is free (stopped immediately after use); otherwise on CPU if free memory and CPU allow (stopped after a few minutes of inactivity)
+| `upsampler` | LLM used |
+|---|---|
+| `auto` | LLM servers (`KLEIN_PROMPT_LLM_URLS`, in the order listed) → local gemma-4-E4B (llama.cpp; GPU if enough VRAM is free, otherwise CPU) |
+| `remote` / `local` | Only one of the above |
+| `pup-int8` | INT8 version of the official upsampler (GPU, 12 GiB or more of free VRAM) |
+| `pup-gguf` | GGUF Q4_K_M version of the official upsampler (GPU, 8 GiB or more of free VRAM) |
+
+The official versions (`pup-*`) are started on each use and stopped immediately afterwards. If free VRAM is insufficient, the image model is temporarily released before starting (`/api/enhance-prompt` cannot release it during a generation, so it returns `503`). Check `upsamplers` in `GET /api/health` to see which are available.
 
 ```json
 {"prompt": "Create a full-body front view photograph of the woman from the first image ...",

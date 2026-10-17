@@ -61,6 +61,20 @@ async function loadModelAvailability() {
   updateModelInfo();
 }
 loadModelAvailability().catch(() => showStatus('モデルの準備状態を確認できませんでした。', true));
+async function loadUpsamplers() {
+  const data = await request('/api/health');
+  const saved = localStorage.getItem('klein-upsampler');
+  for (const option of $('upsampler').options) {
+    const info = data.upsamplers[option.value];
+    option.disabled = !info?.available;
+    if (option.disabled) option.textContent += '（使用不可）';
+    option.title = info?.detail || '';
+  }
+  const preferred = [saved, data.default_upsampler, 'auto'].find(v => v && !$('upsampler').querySelector(`option[value="${v}"]`)?.disabled);
+  if (preferred) $('upsampler').value = preferred;
+}
+$('upsampler').addEventListener('change', () => { try { localStorage.setItem('klein-upsampler', $('upsampler').value); } catch {} });
+loadUpsamplers().catch(() => {});
 async function request(url, options) {
   const response = await fetch(url, options);
   const data = await response.json();
@@ -162,6 +176,7 @@ $('generate-form').addEventListener('submit', async event => {
   const preExpanded = $('auto-upsample').checked && lastUpsampled !== null && $('prompt').value === lastUpsampled;
   upsamplerNote = preExpanded ? '展開済みのキャプションを使用' : 'バイパス（入力文をそのまま使用）';
   data.set('upsample', $('auto-upsample').checked && !preExpanded ? 'true' : 'false');
+  data.set('upsampler', $('upsampler').value);
   for (const file of $('image-input').files) data.append('image', file);
   try {
     const job = await request('/api/generate', { method: 'POST', body: data });
@@ -181,7 +196,7 @@ $('llm-prompt').onclick = async () => {
   const button = $('llm-prompt'); button.disabled = true; button.textContent = 'prompt upsamplerで展開中…';
   try {
     // 編集(参照画像あり)では画像も LLM に見せる(公式 i2i 形式は参照画像の記述に編集内容を織り込むため)。
-    const data = new FormData(); data.set('prompt', field.value); data.set('mode', 'auto');
+    const data = new FormData(); data.set('prompt', field.value); data.set('mode', 'auto'); data.set('upsampler', $('upsampler').value);
     const [w, h] = $('size').value.split(','); data.set('width', w); data.set('height', h);
     for (const file of $('image-input').files) data.append('image', file);
     const result = await request('/api/enhance-prompt', {method: 'POST', body: data});

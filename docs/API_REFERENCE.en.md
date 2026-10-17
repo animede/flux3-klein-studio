@@ -51,6 +51,8 @@ Returns the server status, the loaded model, and whether model files are ready.
 | `models` | object | Selection value → [`ModelInfo`](#modelinfo) |
 | `busy` | boolean | Whether a generation is in progress |
 | `memory_budget_gib` | number | PyTorch GPU allocation limit (GiB) |
+| `default_upsampler` | string | Default upsampler (`KLEIN_UPSAMPLER`, default `auto`) |
+| `upsamplers` | object | Upsampler name → `{"available": boolean, "detail": string}`: whether it is usable, or why not and how much free VRAM it needs |
 
 ```json
 {
@@ -113,18 +115,35 @@ When generating with a reviewed caption, add `upsample=false` to `/api/generate`
 | `image` | file (repeatable) | No | | Reference images for editing. Repeat the field. Only the first 8 are used; the 9th and later are ignored. Each up to 10MB and 16 megapixels |
 | `width` | integer | No | | For `t2i` modes, tells the LLM the output aspect ratio (only when `height` is also given) |
 | `height` | integer | No | | Same as above |
+| `upsampler` | string | No | `KLEIN_UPSAMPLER` (default `auto`) | LLM to use. See [Choosing the LLM](#choosing-the-llm) |
 
-- Reference images have transparent areas filled with white, are downscaled to at most 1024px on the long side, and are passed to the LLM before the request text.
+The input is built the same way as in the official inference code (`src/flux3/pup.py`).
+
+- Reference images have transparent areas filled with white, are downscaled to the official pixel counts (about 1MP for one image, 724² for two, 512² each for three or more), converted to JPEG, and passed before the request text.
+- For edits, the request text is wrapped in the official three-line format (`Reference images follow in order ...` / `User request: ...` / `Output the caption.`).
+- For `t2i` modes with width and height given, a `TARGET CANVAS: width:height` line is prepended (the form the official t2i system prompt accepts).
+- Decoding is greedy (temperature 0), with a presence penalty of 1.5 for `t2i` modes and 0 for `i2i` modes, up to 3584 tokens.
 - For `i2i` modes without reference images, only the request text is passed.
 
-### LLM selection order
+### Choosing the LLM
+
+| `upsampler` | LLM used |
+|---|---|
+| `auto` | Tries 1 → 2 below in order |
+| `remote` | 1 only |
+| `local` | 2 only |
+| `pup-int8` | INT8 version of the official upsampler (official BFL release, `pup_server.py`). GPU with 12GiB or more of free VRAM |
+| `pup-gguf` | GGUF version of the official upsampler (Q4_K_M + mmproj, community-made, llama-server). GPU with 8GiB or more of free VRAM |
+
+The official versions (`pup-*`) are started on the GPU on each use and stopped right after use. If free VRAM is insufficient, the image model is temporarily released before starting.
+Inside `/api/generate` it can always be released; `/api/enhance-prompt` releases it only when no generation is in progress (otherwise `503`).
 
 1. **LLM servers**: tries the OpenAI-compatible URLs in `KLEIN_PROMPT_LLM_URLS` in the order listed. Not used if unset.
    A server is skipped if its `/models` does not respond. When reference images are present, servers whose `/models` `capabilities` show no image input support are also skipped.
 2. **Local gemma-4-E4B** (llama.cpp `llama-server`): starts on the GPU if there is enough free VRAM; otherwise on the CPU if there is enough free memory and CPU headroom.
    On the GPU it stops right after use; on the CPU it stops after a period of inactivity. Disable with `KLEIN_LOCAL_LLM=0`.
 
-If none is available, returns `503`.
+If no LLM is available, returns `503`.
 
 ### Response `200`
 
@@ -132,9 +151,9 @@ If none is available, returns `503`.
 |---|---|---|
 | `prompt` | string | Expanded caption. Can be used as-is for `prompt` in `/api/generate` |
 | `mode` | string | Mode actually used (`auto` resolved) |
-| `source` | string | LLM used: one of `remote:<URL>`, `local-gpu`, `local-cpu` |
-| `model` | string \| null | LLM model name. `null` if the LLM server returns no name; the GGUF file name for the local LLM |
-| `cached` | boolean | Whether the result came from the cache. The latest 128 results are cached, keyed by mode, request text, width/height, and reference images |
+| `source` | string | LLM used: one of `remote:<URL>`, `local-gpu`, `local-cpu`, `pup-int8`, `pup-gguf` |
+| `model` | string \| null | LLM model name. `null` if the LLM server returns no name; the model file name for the local LLM and the official versions |
+| `cached` | boolean | Whether the result came from the cache. The latest 128 results are cached, keyed by upsampler, mode, request text, width/height, and reference images |
 
 ```json
 {
@@ -151,7 +170,7 @@ If none is available, returns `503`.
 | Code | Cause |
 |---|---|
 | `413` | A reference image exceeds 10MB |
-| `422` | `prompt` is empty, `mode` is invalid, a reference image cannot be read as an image, or exceeds 16 megapixels |
+| `422` | `prompt` is empty, `mode` or `upsampler` is invalid, a reference image cannot be read as an image, or exceeds 16 megapixels |
 | `503` | No LLM is available. `detail` contains why each candidate could not be used |
 
 ### Example
@@ -182,6 +201,7 @@ Creates an image generation job and returns `202` immediately. Generation runs i
 | `boxes` | string (JSON) | No | `""` | Placement. See [`boxes` format](#boxes-format) |
 | `upsample` | boolean | No | `true` | Prompt upsampler: expands the prompt before generation, using the same process as `/api/enhance-prompt`. `false` bypasses it (for comparison, or when sending an already-expanded caption) |
 | `upsample_strict` | boolean | No | `false` | If `true`, the job fails with `error` when expansion is not possible. If `false`, it generates with the original prompt and sets `warning` |
+| `upsampler` | string | No | `KLEIN_UPSAMPLER` (default `auto`) | LLM used for expansion. See [Choosing the LLM](#choosing-the-llm). If an official version lacks VRAM, the image model is released before expansion and reloaded before generation |
 
 Send booleans as `true` / `false` (`1` / `0`, `yes` / `no`, `on` / `off` are also accepted).
 
@@ -321,6 +341,7 @@ URLs are relative to the base URL. Files are not deleted automatically.
 |---|---|---|
 | `prompt` | string | Prompt actually passed to the model (after expansion and `boxes` appending) |
 | `original_prompt` | string \| null | Original prompt when expansion or `boxes` changed it. `null` if unchanged |
+| `upsampler` | string \| null | Selected upsampler (`null` if not used) |
 | `upsample_source` | string \| null | LLM used for expansion |
 | `boxes` | array \| null | The `boxes` that were sent |
 | `seed` / `width` / `height` | integer | Generation settings |
@@ -356,6 +377,7 @@ URLs are relative to the base URL. Files are not deleted automatically.
 | `image_url` | string \| null | PNG URL on completion |
 | `metadata_url` | string \| null | Metadata JSON URL on completion |
 | `upsample` | boolean | Whether the job uses the prompt upsampler (`false` with `upsample=false`) |
+| `upsampler` | string | Selected upsampler (e.g. `auto`) |
 | `upsample_source` | string \| null | LLM used for expansion |
 | `warning` | string \| null | Warning when expansion failed and the original prompt was used |
 
@@ -426,6 +448,7 @@ Read at server startup (also when started via `run.sh`).
 | `KLEIN_PROMPT_LLM_MODEL` | None | Name sent as `model` to the first LLM server. If unset, or for the second and later servers, the first entry of each server's `/models` |
 | `KLEIN_PROMPT_LLM_TIMEOUT_S` | `120` | Timeout per generation (seconds) |
 | `KLEIN_PROMPT_LLM_PROBE_TIMEOUT_S` | `3` | Timeout for the `/models` check (seconds) |
+| `KLEIN_UPSAMPLER` | `auto` | Default upsampler (`auto` / `remote` / `local` / `pup-int8` / `pup-gguf`) |
 
 **Prompt upsampler (local LLM)**
 
@@ -443,6 +466,17 @@ Read at server startup (also when started via `run.sh`).
 | `KLEIN_LOCAL_LLM_START_TIMEOUT_S` | `180` | Startup wait timeout (seconds) |
 | `KLEIN_LOCAL_LLM_TIMEOUT_S` | `300` | Timeout per generation (seconds) |
 | `KLEIN_LOCAL_LLM_IDLE_S` | `600` | Seconds of inactivity before stopping when running on the CPU |
+
+**Prompt upsampler (official versions)**
+
+| Variable | Default | Description |
+|---|---|---|
+| `KLEIN_PUP_INT8_PORT` | `7867` | Port for the INT8 version (`pup_server.py`) (`127.0.0.1` only) |
+| `KLEIN_PUP_INT8_MIN_FREE_GIB` | `12` | Free VRAM required to start the INT8 version (GiB). If short, the image model is released |
+| `KLEIN_PUP_GGUF_PORT` | `7866` | Port for the GGUF version (llama-server) (`127.0.0.1` only) |
+| `KLEIN_PUP_GGUF_MIN_FREE_GIB` | `8` | Free VRAM required to start the GGUF version (GiB) |
+
+They share `KLEIN_LOCAL_LLM_START_TIMEOUT_S` for the startup timeout and `KLEIN_LOCAL_LLM_TIMEOUT_S` for the generation timeout. The GGUF version uses the GPU build of llama-server (`KLEIN_LOCAL_LLM_SERVER`).
 
 ---
 
@@ -464,4 +498,4 @@ Read at server startup (also when started via `run.sh`).
 
 Image generation runs entirely locally. Data leaves the machine only when prompt expansion (`/api/enhance-prompt`, or the default `upsample=true`)
 uses an LLM server, in which case the request text and (for editing) reference images are sent to the destinations in `KLEIN_PROMPT_LLM_URLS`.
-Nothing is sent externally when the local LLM is used.
+Nothing is sent externally when the local LLM or the official versions (`local`, `pup-int8`, `pup-gguf`) are used.

@@ -75,6 +75,8 @@ class HealthResponse(BaseModel):
     models: dict[str, ModelInfo]
     busy: bool
     memory_budget_gib: float
+    default_upsampler: str
+    upsamplers: dict[str, dict[str, Any]]
 
 
 class ModelsResponse(BaseModel):
@@ -99,6 +101,7 @@ class JobResponse(BaseModel):
     image_url: str | None = None
     metadata_url: str | None = None
     upsample: bool = True
+    upsampler: str = "auto"
     upsample_source: str | None = None
     warning: str | None = None
 
@@ -131,6 +134,7 @@ def health():
             for key, item in MODELS.items()
         },
         "busy": engine.lock.locked(), "memory_budget_gib": engine.memory_budget_gib,
+        "default_upsampler": upsampler.default_backend(), "upsamplers": upsampler.backends(),
     }
 
 
@@ -216,8 +220,17 @@ def decode_reference(data: bytes, max_side: int = REFERENCE_MAX_SIDE):
         raise ValueError("画像を読み込めません。PNG、JPEG、WebPなどの画像を選んでください。") from exc
 
 
+def release_vram_if_idle():
+    """For /api/enhance-prompt: free the image model for an official upsampler unless a job is running."""
+    if engine.lock.acquire(blocking=False):
+        try:
+            engine.unload()
+        finally:
+            engine.lock.release()
+
+
 def run_job(job_id, model_key, prompt, references, reference_side, width, height, seed, outpaint=False,
-            box_rows=None, upsample=False, upsample_strict=False):
+            box_rows=None, upsample=False, upsample_strict=False, upsampler_backend=None):
     def progress(status, step, message):
         with jobs_lock:
             jobs[job_id].update(status=status, step=step, message=message)
@@ -230,9 +243,12 @@ def run_job(job_id, model_key, prompt, references, reference_side, width, height
         if upsample:
             progress("upsampling", 0, "プロンプトをLLMで展開しています")
             try:
+                # This job holds engine.lock, so the image model can be unloaded directly
+                # when an official upsampler needs the VRAM; it is loaded again for generation.
                 upsample_info = upsampler.upsample(
                     prompt, images=references, width=width, height=height,
-                    mode="i2i" if references else "t2i",
+                    mode="i2i" if references else "t2i", backend=upsampler_backend,
+                    release_vram=engine.unload,
                 )
                 prompt = upsample_info["prompt"]
                 with jobs_lock:
@@ -263,6 +279,7 @@ def run_job(job_id, model_key, prompt, references, reference_side, width, height
         metadata = {
             "prompt": prompt, "seed": seed, "width": width, "height": height,
             "original_prompt": original_prompt if prompt != original_prompt else None,
+            "upsampler": upsampler_backend if upsample else None,
             "upsample_source": upsample_info["source"] if upsample_info else None,
             "boxes": box_rows,
             # Keep `reference` for clients built against the original single-image API.
@@ -305,6 +322,7 @@ async def enhance_prompt(
     image: list[UploadFile] | None = File(None, description="編集(i2i)の参照画像。順番どおりLLMに見せる。"),
     width: int | None = Form(None, description="T2Iの出力幅(キャンバスの縦横比を伝える)。"),
     height: int | None = Form(None, description="T2Iの出力高さ。"),
+    upsampler_backend: str | None = Form(None, alias="upsampler", description="auto / remote / local / pup-int8 / pup-gguf。省略時はKLEIN_UPSAMPLER(既定auto)。"),
 ):
     """公式システムプロンプトでLLMにキャプションを書かせる(upsampler.py 参照)。
 
@@ -312,6 +330,10 @@ async def enhance_prompt(
     """
     from fastapi.concurrency import run_in_threadpool
 
+    try:
+        upsampler_backend = upsampler.resolve_backend(upsampler_backend)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
     images = []
     for upload in [u for u in (image or []) if u.filename][:MAX_REFERENCES]:
         data = await upload.read(MAX_UPLOAD + 1)
@@ -326,6 +348,7 @@ async def enhance_prompt(
     try:
         result = await run_in_threadpool(
             upsampler.upsample, prompt, mode=mode, images=images, width=width, height=height,
+            backend=upsampler_backend, release_vram=release_vram_if_idle,
         )
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
@@ -387,6 +410,7 @@ async def generate(
     boxes: str = Form("", description="任意のバウンディングボックスJSON。T2Iは{id,bbox,desc}、編集は{id,from,src_bbox,tgt_bbox,desc}(tgt_bbox=nullで削除)。"),
     upsample: bool = Form(True, description="prompt upsampler(既定で有効、モデルカードが必須としている)。生成前にLLMでプロンプトを完全なキャプションへ展開する(/api/enhance-promptと同じ)。falseでバイパス(比較用、または作成済みのキャプションを送るとき)。"),
     upsample_strict: bool = Form(False, description="upsampleが使えないときに生成を止める(既定は元のプロンプトのまま生成し警告を付ける)。"),
+    upsampler_backend: str | None = Form(None, alias="upsampler", description="auto / remote / local / pup-int8 / pup-gguf。省略時はKLEIN_UPSAMPLER(既定auto)。公式版(pup-*)はGPUを多く使い、足りなければ画像モデルを一時的に解放する。"),
 ):
     prompt = prompt.strip()
     if not prompt or len(prompt) > 4000:
@@ -405,6 +429,10 @@ async def generate(
         raise HTTPException(422, "幅・高さは256〜1024の32の倍数で指定してください。")
     if seed < -1 or seed > 2**32 - 1:
         raise HTTPException(422, "シードは-1（ランダム）または0〜4294967295で指定してください。")
+    try:
+        upsampler_backend = upsampler.resolve_backend(upsampler_backend)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
     model = model.lower()
     if model not in MODELS:
         raise HTTPException(422, f"モデルは {' / '.join(MODELS)} から選択してください。")
@@ -448,12 +476,13 @@ async def generate(
                         "seed": seed, "message": "生成を準備しています", "created_at": time.time(),
                         "reference_count": len(references),
                         "reference_max_side": max_side if references else None,
-                        "upsample": bool(upsample), "upsample_source": None, "warning": None,
+                        "upsample": bool(upsample), "upsampler": upsampler_backend,
+                        "upsample_source": None, "warning": None,
                         "cancel": threading.Event()}
         response = public_job(jobs[job_id])
     try:
         pool.submit(run_job, job_id, model, prompt, references, max_side, width, height, seed, outpaint,
-                    box_rows, bool(upsample), bool(upsample_strict))
+                    box_rows, bool(upsample), bool(upsample_strict), upsampler_backend)
     except Exception:
         engine.lock.release()
         raise

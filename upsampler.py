@@ -22,17 +22,25 @@ OpenAI-compatible LLM with BFL's official system prompts
 attaching the reference images *before* the request text for edits, as the model card
 describes.
 
-Backends are tried in order until one answers:
+The request is built as the official inference code does (`src/flux3/pup.py`): references
+resized to the official pixel budget and sent as JPEG before a fixed three-line request for
+edits, greedy decoding with a presence penalty of 1.5 for text-to-image.
 
-1. Remote LLM servers (`KLEIN_PROMPT_LLM_URLS`, comma separated OpenAI-compatible URLs, tried in
-   order; none by default).
-2. A local llama.cpp server with gemma-4-E4B (`KLEIN_LOCAL_LLM_*`), started on demand:
-   on the GPU when enough VRAM is free (and stopped right after the request so the
-   image model gets the memory back), otherwise on the CPU when enough RAM is free
-   and the CPU is not saturated (kept running for a few idle minutes).
-3. Otherwise the upsampler is unavailable and `UpsampleUnavailable` explains why.
+Backends (`backend=` / `KLEIN_UPSAMPLER`):
 
-Results are cached by (mode, request, canvas, image bytes).
+- `auto` (default): remote LLM servers (`KLEIN_PROMPT_LLM_URLS`, comma separated
+  OpenAI-compatible URLs, tried in order; none by default), then the local llama.cpp server
+  with gemma-4-E4B (`KLEIN_LOCAL_LLM_*`), started on demand: on the GPU when enough VRAM is
+  free (stopped right after the request so the image model gets the memory back), otherwise
+  on the CPU when enough RAM is free and the CPU is not saturated (kept for a few idle minutes).
+- `remote` / `local`: only one of the two above.
+- `pup-int8`: BFL's official INT8 ConvRot upsampler (pup_server.py, ~10 GiB of VRAM).
+- `pup-gguf`: the official upsampler as a community Q4_K_M GGUF on llama.cpp (~7 GiB of VRAM).
+  Both official builds run on the GPU only, are started per request and stopped right after.
+  When VRAM is short they call `release_vram` (the studio unloads the image model) first.
+
+If no backend answers, `UpsampleUnavailable` explains why.
+Results are cached by (backend, mode, request, canvas, image bytes).
 """
 from __future__ import annotations
 
@@ -51,10 +59,13 @@ from pathlib import Path
 
 import httpx
 
+import model_config
+
 ROOT = Path(__file__).resolve().parent
 SYSTEM_PROMPTS_PATH = ROOT / "models" / "flux-3-image-klein-pup" / "system_prompts.json"
 PUP_REPO = "black-forest-labs/flux-3-image-klein-pup"
 MODES = ("t2i", "i2i", "t2i_bbox", "i2i_bbox")
+BACKENDS = ("auto", "remote", "local", "pup-int8", "pup-gguf")
 
 log = logging.getLogger("klein.upsampler")
 
@@ -121,17 +132,50 @@ def resolve_mode(mode: str | None, image_count: int) -> str:
     return mode
 
 
-def _image_part(image) -> dict:
-    """PIL image or raw bytes -> OpenAI image_url part (PNG, longest side <= 1024)."""
-    from PIL import Image
+# The official request scaffolds and decoding (src/flux3/pup.py of the inference code).
+I2I_SCAFFOLD = ("Reference images follow in order (the first image, the second image, ...).\n"
+                "User request: {instruction}\n"
+                "Output the caption.")
+I2I_BBOX_SCAFFOLD = ("Reference images follow in attachment order: ref_image_0, ref_image_1, ...\n"
+                     "User editing instruction: {instruction}\n"
+                     "Decide the edit, imagine the target image, and output the annotation record.")
+PRESENCE_PENALTY = {"t2i": 1.5, "i2i": 0.0}
+MAX_TOKENS = 3584
+MAX_PIXELS_BY_REFS = {1: 1024 * 1024, 2: 724 * 724}  # 3 or more references: 512 * 512 each
+
+
+def reference_size(width: int, height: int, n_refs: int, multiple: int = 32) -> tuple[int, int]:
+    """Official reference budget: 1 MP for one reference, 724² for two, 512² each beyond."""
+    import math
+
+    cap = MAX_PIXELS_BY_REFS.get(n_refs, 512 * 512)
+    floor = lambda v: max(multiple, int(math.floor(v / multiple)) * multiple)  # noqa: E731
+    w = max(multiple, round(width / multiple) * multiple)
+    h = max(multiple, round(height / multiple) * multiple)
+    if w * h > cap:
+        beta = math.sqrt(width * height / cap)
+        w, h = floor(width / beta), floor(height / beta)
+    return w, h
+
+
+def _image_part(image, n_refs: int = 1) -> dict:
+    """PIL image or raw bytes -> OpenAI image_url part, preprocessed as the official upsampler does:
+    RGB over white, LANCZOS to the size budget, JPEG q92."""
+    from PIL import Image, ImageOps
 
     if isinstance(image, (bytes, bytearray)):
         image = Image.open(io.BytesIO(image))
+    image = ImageOps.exif_transpose(image)
+    if image.mode in ("RGBA", "LA", "PA") or (image.mode == "P" and "transparency" in image.info):
+        rgba = image.convert("RGBA")
+        image = Image.alpha_composite(Image.new("RGBA", rgba.size, (255, 255, 255, 255)), rgba)
     image = image.convert("RGB")
-    image.thumbnail((1024, 1024))
+    size = reference_size(image.width, image.height, n_refs)
+    if image.size != size:
+        image = image.resize(size, Image.Resampling.LANCZOS)
     buf = io.BytesIO()
-    image.save(buf, "PNG")
-    return {"type": "image_url", "image_url": {"url": "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode()}}
+    image.save(buf, "JPEG", quality=92)
+    return {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode()}}
 
 
 def build_messages(mode: str, request: str, images=(), width: int | None = None, height: int | None = None) -> list:
@@ -140,14 +184,16 @@ def build_messages(mode: str, request: str, images=(), width: int | None = None,
         # The t2i prompts accept a leading canvas line and never mention it in the caption.
         text = f"TARGET CANVAS: {width}:{height}\n{text}"
     if mode.startswith("i2i") and images:
-        content = [_image_part(img) for img in images] + [{"type": "text", "text": text}]
+        scaffold = I2I_BBOX_SCAFFOLD if mode == "i2i_bbox" else I2I_SCAFFOLD
+        content = [_image_part(img, len(images)) for img in images]
+        content.append({"type": "text", "text": scaffold.format(instruction=text)})
     else:
         content = text
     return [{"role": "system", "content": system_prompt_for(mode)}, {"role": "user", "content": content}]
 
 
-def _cache_key(mode: str, request: str, images, width, height) -> str:
-    digest = hashlib.sha256(f"{mode}\n{width}x{height}\n{request}".encode())
+def _cache_key(backend: str, mode: str, request: str, images, width, height) -> str:
+    digest = hashlib.sha256(f"{backend}\n{mode}\n{width}x{height}\n{request}".encode())
     for img in images or ():
         if isinstance(img, (bytes, bytearray)):
             digest.update(bytes(img))
@@ -193,14 +239,15 @@ def _model_info(base_url: str, timeout: float) -> dict | None:
             "multimodal": ("multimodal" in caps) if isinstance(caps, list) else None}
 
 
-def _chat(base_url: str, model: str | None, messages: list, timeout: float) -> str:
-    payload = {"messages": messages, "temperature": 0, "max_tokens": 1500, "stream": False}
+def _chat(base_url: str, model: str | None, messages: list, timeout: float, mode: str = "t2i") -> str:
+    payload = {"messages": messages, "temperature": 0, "top_p": 0.95, "top_k": 20,
+               "presence_penalty": PRESENCE_PENALTY[mode[:3]], "max_tokens": MAX_TOKENS, "stream": False}
     if model:
         payload["model"] = model
     res = httpx.post(f"{base_url}/chat/completions", json=payload, timeout=timeout)
     res.raise_for_status()
     text = (res.json()["choices"][0]["message"]["content"] or "").strip()
-    if not text or len(text) > 8000:
+    if not text or len(text) > 12000:
         raise ValueError("empty or oversized completion")
     return text
 
@@ -283,8 +330,8 @@ class LocalLLM:
             return None
         return None
 
-    def choose_device(self, need_vision: bool) -> tuple[str | None, str]:
-        """('gpu'|'cpu'|None, reason)."""
+    def choose_device(self, need_vision: bool, release_vram=None) -> tuple[str | None, str]:
+        """('gpu'|'cpu'|None, reason). gemma-4-E4B falls back to the CPU instead of releasing VRAM."""
         if not self.server_path("gpu").is_file() and not self.server_path("cpu").is_file():
             return None, f"llama-server が見つかりません({self.server_path('gpu')})"
         if not self.model_path().is_file():
@@ -309,8 +356,7 @@ class LocalLLM:
             sock.settimeout(0.5)
             return sock.connect_ex(("127.0.0.1", self.port())) == 0
 
-    def _start(self, device: str, need_vision: bool) -> None:
-        self.stop()
+    def command(self, device: str) -> list[str]:
         cpus = os.cpu_count() or 2
         # --reasoning off: the model card runs the upsampler with thinking off; gemma-4 thinks by
         # default, which on the CPU meant minutes of reasoning tokens before the caption.
@@ -320,6 +366,17 @@ class LocalLLM:
         mmproj = self.mmproj_path()
         if mmproj is not None:
             cmd += ["--mmproj", str(mmproj)]
+        return cmd
+
+    def source(self, device: str) -> str:
+        return f"local-{device}"
+
+    def model_name(self) -> str:
+        return self.model_path().name
+
+    def _start(self, device: str, need_vision: bool) -> None:
+        self.stop()
+        cmd = self.command(device)
         env = dict(os.environ)
         if device == "cpu":
             env["CUDA_VISIBLE_DEVICES"] = ""
@@ -353,9 +410,9 @@ class LocalLLM:
         self.proc = None
         self.device = None
 
-    def chat(self, messages: list, need_vision: bool) -> tuple[str, str]:
+    def chat(self, messages: list, need_vision: bool, mode: str = "t2i", release_vram=None) -> tuple[str, str]:
         with self.lock:
-            device, reason = self.choose_device(need_vision)
+            device, reason = self.choose_device(need_vision, release_vram)
             if device is None:
                 raise UpsampleUnavailable(reason)
             if self.proc is None or self.proc.poll() is not None or self.device != device:
@@ -364,7 +421,8 @@ class LocalLLM:
                 self.idle_timer.cancel()
                 self.idle_timer = None
             try:
-                text = _chat(self.base_url, None, messages, timeout=_env_float("KLEIN_LOCAL_LLM_TIMEOUT_S", 300.0))
+                text = _chat(self.base_url, None, messages, timeout=_env_float("KLEIN_LOCAL_LLM_TIMEOUT_S", 300.0),
+                             mode=mode)
             finally:
                 if self.device == "gpu":
                     # Give the VRAM back right away: the image model loads next.
@@ -373,10 +431,99 @@ class LocalLLM:
                     self.idle_timer = threading.Timer(_env_float("KLEIN_LOCAL_LLM_IDLE_S", 600.0), self.stop)
                     self.idle_timer.daemon = True
                     self.idle_timer.start()
-            return text, f"local-{device}"
+            return text, self.source(device)
+
+
+class OfficialUpsampler(LocalLLM):
+    """BFL's prompt upsampler, run on the GPU per request. These builds need more VRAM than the
+    image model's 8 GiB budget: when the GPU is short, ``release_vram`` (the studio unloads the
+    image model) is called before giving up."""
+
+    key = ""
+    default_port = 0
+    default_min_free_gib = 0.0
+
+    def env_name(self, suffix: str) -> str:
+        return "KLEIN_" + self.key.upper().replace("-", "_") + "_" + suffix
+
+    def port(self) -> int:  # type: ignore[override]
+        return int(os.getenv(self.env_name("PORT"), str(self.default_port)))
+
+    def min_free_gib(self) -> float:
+        return _env_float(self.env_name("MIN_FREE_GIB"), self.default_min_free_gib)
+
+    def source(self, device: str) -> str:
+        return self.key
+
+    def missing(self) -> str | None:
+        raise NotImplementedError
+
+    def choose_device(self, need_vision: bool, release_vram=None) -> tuple[str | None, str]:  # type: ignore[override]
+        problem = self.missing()
+        if problem:
+            return None, problem
+        need = self.min_free_gib()
+        vram = self.free_vram_gib()
+        if vram is None:
+            return None, "CUDA の GPU が見つかりません"
+        if vram < need and release_vram is not None:
+            release_vram()
+            vram = self.free_vram_gib() or 0.0
+        if vram < need:
+            return None, f"空き VRAM が足りません({vram:.1f}GiB / 必要 {need:.0f}GiB)"
+        return "gpu", f"空き VRAM {vram:.1f}GiB"
+
+
+class PupGGUF(OfficialUpsampler):
+    """Community Q4_K_M GGUF of the official upsampler (with its vision mmproj) on llama.cpp."""
+
+    key = "pup-gguf"
+    default_port = 7866
+    default_min_free_gib = 8.0
+
+    def model_path(self) -> Path:  # type: ignore[override]
+        return model_config.PUP_GGUF_PATH
+
+    def mmproj_path(self) -> Path | None:  # type: ignore[override]
+        return model_config.PUP_MMPROJ_PATH if model_config.PUP_MMPROJ_PATH.is_file() else None
+
+    def missing(self) -> str | None:
+        if not self.server_path("gpu").is_file():
+            return f"llama-server が見つかりません({self.server_path('gpu')})"
+        if not self.model_path().is_file() or self.mmproj_path() is None:
+            return "公式 upsampler の GGUF が未取得です(download_models.py flux3 --pup gguf)"
+        return None
+
+
+class PupINT8(OfficialUpsampler):
+    """BFL's official INT8 ConvRot build, served by pup_server.py (Transformers + comfy-kitchen)."""
+
+    key = "pup-int8"
+    default_port = 7867
+    default_min_free_gib = 12.0
+
+    def model_path(self) -> Path:  # type: ignore[override]
+        return model_config.PUP_INT8_PATH
+
+    def missing(self) -> str | None:
+        if not self.model_path().is_file() or not (model_config.PUP_CONFIG_DIR / "config.json").is_file():
+            return "公式 upsampler の INT8 版が未取得です(download_models.py flux3 --pup int8)"
+        return None
+
+    def command(self, device: str) -> list[str]:
+        import sys
+
+        return [sys.executable, str(ROOT / "pup_server.py"), "--port", str(self.port()),
+                "--device", os.getenv("KLEIN_DEVICE", "cuda:0")]
+
+    def model_name(self) -> str:
+        return self.model_path().name
 
 
 local_llm = LocalLLM()
+pup_gguf = PupGGUF()
+pup_int8 = PupINT8()
+OFFICIAL = {"pup-gguf": pup_gguf, "pup-int8": pup_int8}
 
 # ---------------------------------------------------------------------------
 # Public entry point
@@ -387,10 +534,38 @@ _cache_lock = threading.Lock()
 CACHE_SIZE = 128
 
 
+def default_backend() -> str:
+    backend = (os.getenv("KLEIN_UPSAMPLER") or "auto").strip().lower()
+    return backend if backend in BACKENDS else "auto"
+
+
+def resolve_backend(backend: str | None) -> str:
+    backend = (backend or "").strip().lower() or default_backend()
+    if backend not in BACKENDS:
+        raise ValueError(f"upsampler は {' / '.join(BACKENDS)} のいずれかです")
+    return backend
+
+
+def backends() -> dict:
+    """Which backends can run here: {name: {"available": bool, "detail": str}}."""
+    out = {"auto": {"available": True, "detail": "LLM サーバ → ローカル gemma-4-E4B"}}
+    urls = remote_urls()
+    out["remote"] = {"available": bool(urls), "detail": f"{len(urls)} 台" if urls else "KLEIN_PROMPT_LLM_URLS 未設定"}
+    local_ok = local_llm.server_path("gpu").is_file() and local_llm.model_path().is_file()
+    out["local"] = {"available": local_ok, "detail": local_llm.model_path().name if local_ok else "llama-server またはモデルが未配置"}
+    for name, server in OFFICIAL.items():
+        problem = server.missing()
+        out[name] = {"available": problem is None, "detail": problem or f"GPU、空き VRAM {server.min_free_gib():.0f}GiB 以上"}
+    return out
+
+
 def upsample(request: str, *, mode: str = "auto", images=(), width: int | None = None,
-             height: int | None = None, use_local: bool = True) -> dict:
+             height: int | None = None, use_local: bool = True, backend: str | None = None,
+             release_vram=None) -> dict:
     """Expand `request` into a full FLUX 3 caption.
 
+    `backend` is one of BACKENDS (default `KLEIN_UPSAMPLER`, else "auto"). `release_vram` is called
+    when an official upsampler needs more VRAM than is free (the studio unloads the image model).
     Returns {"prompt", "mode", "source", "model", "cached"}. Raises UpsampleUnavailable
     when every backend failed (the message lists each reason).
     """
@@ -398,7 +573,8 @@ def upsample(request: str, *, mode: str = "auto", images=(), width: int | None =
         raise ValueError("prompt が空です")
     images = list(images or ())
     mode = resolve_mode(mode, len(images))
-    key = _cache_key(mode, request, images, width, height)
+    backend = resolve_backend(backend)
+    key = _cache_key(backend, mode, request, images, width, height)
     with _cache_lock:
         if key in _cache:
             _cache.move_to_end(key)
@@ -409,7 +585,16 @@ def upsample(request: str, *, mode: str = "auto", images=(), width: int | None =
     reasons: list[str] = []
     result: dict | None = None
     override_model = os.getenv("KLEIN_PROMPT_LLM_MODEL")
-    for index, url in enumerate(remote_urls()):
+    if backend in OFFICIAL:
+        server = OFFICIAL[backend]
+        try:
+            text, source = server.chat(messages, need_vision, mode, release_vram)
+            result = {"prompt": text, "mode": mode, "source": source, "model": server.model_name()}
+        except UpsampleUnavailable as exc:
+            reasons.append(f"{backend}: {exc}")
+        except Exception as exc:  # noqa: BLE001
+            reasons.append(f"{backend}: {type(exc).__name__}: {exc}")
+    for index, url in enumerate(remote_urls() if backend in ("auto", "remote") else []):
         info = _model_info(url, timeout=_env_float("KLEIN_PROMPT_LLM_PROBE_TIMEOUT_S", 3.0))
         if info is None:
             reasons.append(f"{url}: 応答なし")
@@ -419,15 +604,16 @@ def upsample(request: str, *, mode: str = "auto", images=(), width: int | None =
             continue
         model = override_model if (override_model and index == 0) else info.get("id")
         try:
-            text = _chat(url, model, messages, timeout=_env_float("KLEIN_PROMPT_LLM_TIMEOUT_S", 120.0))
+            text = _chat(url, model, messages, timeout=_env_float("KLEIN_PROMPT_LLM_TIMEOUT_S", 120.0), mode=mode)
         except Exception as exc:  # noqa: BLE001
             reasons.append(f"{url}: {type(exc).__name__}")
             continue
         result = {"prompt": text, "mode": mode, "source": f"remote:{url}", "model": model}
         break
-    if result is None and use_local and os.getenv("KLEIN_LOCAL_LLM", "1") != "0":
+    if (result is None and use_local and backend in ("auto", "local")
+            and os.getenv("KLEIN_LOCAL_LLM", "1") != "0"):
         try:
-            text, source = local_llm.chat(messages, need_vision)
+            text, source = local_llm.chat(messages, need_vision, mode)
             result = {"prompt": text, "mode": mode, "source": source, "model": local_llm.model_path().name}
         except UpsampleUnavailable as exc:
             reasons.append(f"ローカル LLM: {exc}")
@@ -443,9 +629,11 @@ def upsample(request: str, *, mode: str = "auto", images=(), width: int | None =
 
 
 def shutdown() -> None:
-    local_llm.stop()
+    for server in (local_llm, *OFFICIAL.values()):
+        server.stop()
 
 
-__all__ = ["UpsampleUnavailable", "upsample", "resolve_mode", "build_messages", "system_prompt_for",
-           "remote_urls", "local_llm", "shutdown", "MODES"]
+__all__ = ["UpsampleUnavailable", "upsample", "resolve_mode", "resolve_backend", "default_backend", "backends",
+           "build_messages", "system_prompt_for", "remote_urls", "local_llm", "pup_gguf", "pup_int8",
+           "shutdown", "MODES", "BACKENDS"]
 

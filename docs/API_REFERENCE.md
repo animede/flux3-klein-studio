@@ -51,6 +51,8 @@ FLUX 3 Image Klein Reference Studio の HTTP API の全エンドポイント、�
 | `models` | object | 選択値 → [`ModelInfo`](#modelinfo) |
 | `busy` | boolean | 生成中か |
 | `memory_budget_gib` | number | PyTorch の GPU 割り当て上限(GiB) |
+| `default_upsampler` | string | 既定の upsampler(`KLEIN_UPSAMPLER`、既定 `auto`) |
+| `upsamplers` | object | upsampler の名前 → `{"available": boolean, "detail": string}`。使えるか、使えない理由や必要な空き VRAM |
 
 ```json
 {
@@ -113,18 +115,35 @@ BFL 公式のシステムプロンプト(`flux-3-image-klein-pup` の `system_pr
 | `image` | file(複数可) | いいえ | | 編集の参照画像。同名フィールドを繰り返す。先頭の 8 枚だけを使い、9 枚目以降は無視する。1 枚 10MB・1600 万画素以内 |
 | `width` | integer | いいえ | | `t2i` 系で、出力の縦横比を LLM に伝える(`height` と両方指定したときだけ) |
 | `height` | integer | いいえ | | 同上 |
+| `upsampler` | string | いいえ | `KLEIN_UPSAMPLER`(既定 `auto`) | 使う LLM。[LLM の選び方](#llm-の選び方) |
 
-- 参照画像は、透過部分を白で埋め、長辺 1024px 以内に縮小してから、依頼文より先に LLM へ渡します。
+入力は公式の推論コード(`src/flux3/pup.py`)と同じ形にします。
+
+- 参照画像は、透過部分を白で埋め、公式の画素数(1 枚なら約 1MP、2 枚なら 724²、3 枚以上は 512² ずつ)に縮小し、JPEG にして、依頼文より先に渡します。
+- 編集では、依頼文を公式の 3 行の書式(`Reference images follow in order ...` / `User request: ...` / `Output the caption.`)に入れます。
+- `t2i` 系で縦横を指定すると、先頭に `TARGET CANVAS: 幅:高さ` の行を付けます(公式の t2i システムプロンプトが受け付ける形)。
+- デコードは貪欲法(temperature 0)、presence penalty は `t2i` 系 1.5・`i2i` 系 0、最大 3584 トークン。
 - `i2i` 系で参照画像がない場合は、依頼文だけを渡します。
 
-### LLM を選ぶ順序
+### LLM の選び方
+
+| `upsampler` | 使う LLM |
+|---|---|
+| `auto` | 下の 1 → 2 の順に試す |
+| `remote` | 1 だけ |
+| `local` | 2 だけ |
+| `pup-int8` | 公式 upsampler の INT8 版(BFL 公式、`pup_server.py`)。GPU で空き VRAM 12GiB 以上 |
+| `pup-gguf` | 公式 upsampler の GGUF 版(Q4_K_M+mmproj、コミュニティ製、llama-server)。GPU で空き VRAM 8GiB 以上 |
+
+公式版(`pup-*`)は、使うたびに GPU で起動し、使い終わるとすぐ止めます。空き VRAM が足りないときは、画像モデルを一時的に解放してから起動します。
+`/api/generate` の中ではいつでも解放でき、`/api/enhance-prompt` では生成中でないときだけ解放します(生成中なら `503`)。
 
 1. **LLM サーバ**: `KLEIN_PROMPT_LLM_URLS` に書いた OpenAI 互換の URL を、書いた順に試す。未設定なら使わない。
    各サーバの `/models` に応答がなければ飛ばす。参照画像があるときは、`/models` の `capabilities` で画像入力に対応しないと分かるサーバも飛ばす。
 2. **ローカルの gemma-4-E4B**(llama.cpp の `llama-server`): 空き VRAM が十分なら GPU、そうでなく空きメモリと CPU に余裕があれば CPU で起動する。
    GPU で動かした場合は使い終わるとすぐ停止し、CPU の場合は一定時間使われなければ停止する。`KLEIN_LOCAL_LLM=0` で無効。
 
-どれも使えなければ `503` を返します。
+使える LLM がなければ `503` を返します。
 
 ### レスポンス `200`
 
@@ -132,9 +151,9 @@ BFL 公式のシステムプロンプト(`flux-3-image-klein-pup` の `system_pr
 |---|---|---|
 | `prompt` | string | 展開したキャプション。そのまま `/api/generate` の `prompt` に使える |
 | `mode` | string | 実際に使ったモード(`auto` は解決済み) |
-| `source` | string | 使った LLM。`remote:<URL>`、`local-gpu`、`local-cpu` のいずれか |
-| `model` | string \| null | LLM のモデル名。LLM サーバが名前を返さなければ `null`、ローカル LLM なら GGUF のファイル名 |
-| `cached` | boolean | キャッシュから返したか。モード・依頼文・縦横・参照画像が同じなら、直近 128 件をキャッシュから返す |
+| `source` | string | 使った LLM。`remote:<URL>`、`local-gpu`、`local-cpu`、`pup-int8`、`pup-gguf` のいずれか |
+| `model` | string \| null | LLM のモデル名。LLM サーバが名前を返さなければ `null`、ローカル・公式版ならモデルのファイル名 |
+| `cached` | boolean | キャッシュから返したか。upsampler・モード・依頼文・縦横・参照画像が同じなら、直近 128 件をキャッシュから返す |
 
 ```json
 {
@@ -151,7 +170,7 @@ BFL 公式のシステムプロンプト(`flux-3-image-klein-pup` の `system_pr
 | コード | 原因 |
 |---|---|
 | `413` | 参照画像が 1 枚 10MB を超える |
-| `422` | `prompt` が空、`mode` が不正、参照画像を画像として読めない、1600 万画素を超える |
+| `422` | `prompt` が空、`mode` または `upsampler` が不正、参照画像を画像として読めない、1600 万画素を超える |
 | `503` | 使える LLM がない。`detail` に各候補を使えなかった理由が入る |
 
 ### 例
@@ -182,6 +201,7 @@ curl -X POST http://127.0.0.1:7864/api/enhance-prompt \
 | `boxes` | string(JSON) | いいえ | `""` | 位置指定。[boxes の書式](#boxes-の書式) |
 | `upsample` | boolean | いいえ | `true` | prompt upsampler。生成の前に `/api/enhance-prompt` と同じ処理でプロンプトを展開する。`false` でバイパス(比較用、または展開済みのキャプションを送るとき) |
 | `upsample_strict` | boolean | いいえ | `false` | `true` なら、展開できないときにジョブを `error` にする。`false` なら元のプロンプトのまま生成し、`warning` を付ける |
+| `upsampler` | string | いいえ | `KLEIN_UPSAMPLER`(既定 `auto`) | 展開に使う LLM。[LLM の選び方](#llm-の選び方)。公式版で VRAM が足りなければ、画像モデルを解放してから展開し、生成の前に読み込み直す |
 
 boolean は `true` / `false`(`1` / `0`、`yes` / `no`、`on` / `off` も可)で送ります。
 
@@ -321,6 +341,7 @@ URL はベース URL からの相対パスです。ファイルは自動では�
 |---|---|---|
 | `prompt` | string | 実際にモデルへ渡したプロンプト(展開・`boxes` 付加の後) |
 | `original_prompt` | string \| null | 展開や `boxes` でプロンプトが変わったときの元のプロンプト。変わらなければ `null` |
+| `upsampler` | string \| null | 選んだ upsampler(使わなかったときは `null`) |
 | `upsample_source` | string \| null | 展開に使った LLM |
 | `boxes` | array \| null | 送った `boxes` |
 | `seed` / `width` / `height` | integer | 生成条件 |
@@ -356,6 +377,7 @@ URL はベース URL からの相対パスです。ファイルは自動では�
 | `image_url` | string \| null | 完了時の PNG の URL |
 | `metadata_url` | string \| null | 完了時のメタデータ JSON の URL |
 | `upsample` | boolean | prompt upsampler を使うジョブか(`upsample=false` なら `false`) |
+| `upsampler` | string | 選んだ upsampler(`auto` など) |
 | `upsample_source` | string \| null | 展開に使った LLM |
 | `warning` | string \| null | 展開できず元のプロンプトで生成したときの警告 |
 
@@ -424,6 +446,7 @@ FastAPI 自身の型検証(必須フィールドの欠落、整数でない値�
 | `KLEIN_PROMPT_LLM_MODEL` | なし | 1 番目の LLM サーバに `model` として送る名前。未指定、または 2 番目以降のサーバでは、各サーバの `/models` の先頭 |
 | `KLEIN_PROMPT_LLM_TIMEOUT_S` | `120` | 1 回の生成のタイムアウト(秒) |
 | `KLEIN_PROMPT_LLM_PROBE_TIMEOUT_S` | `3` | `/models` の確認のタイムアウト(秒) |
+| `KLEIN_UPSAMPLER` | `auto` | 既定の upsampler(`auto` / `remote` / `local` / `pup-int8` / `pup-gguf`) |
 
 **prompt upsampler(ローカル LLM)**
 
@@ -441,6 +464,17 @@ FastAPI 自身の型検証(必須フィールドの欠落、整数でない値�
 | `KLEIN_LOCAL_LLM_START_TIMEOUT_S` | `180` | 起動待ちのタイムアウト(秒) |
 | `KLEIN_LOCAL_LLM_TIMEOUT_S` | `300` | 1 回の生成のタイムアウト(秒) |
 | `KLEIN_LOCAL_LLM_IDLE_S` | `600` | CPU で動かしたとき、使われずに停止するまでの秒数 |
+
+**prompt upsampler(公式版)**
+
+| 変数 | 既定値 | 内容 |
+|---|---|---|
+| `KLEIN_PUP_INT8_PORT` | `7867` | INT8 版(`pup_server.py`)のポート(`127.0.0.1` のみ) |
+| `KLEIN_PUP_INT8_MIN_FREE_GIB` | `12` | INT8 版の起動に必要な空き VRAM(GiB)。足りなければ画像モデルを解放する |
+| `KLEIN_PUP_GGUF_PORT` | `7866` | GGUF 版(llama-server)のポート(`127.0.0.1` のみ) |
+| `KLEIN_PUP_GGUF_MIN_FREE_GIB` | `8` | GGUF 版の起動に必要な空き VRAM(GiB) |
+
+起動のタイムアウトは `KLEIN_LOCAL_LLM_START_TIMEOUT_S`、生成のタイムアウトは `KLEIN_LOCAL_LLM_TIMEOUT_S` を共用します。GGUF 版は GPU 向けの llama-server(`KLEIN_LOCAL_LLM_SERVER`)を使います。
 
 ---
 
@@ -462,4 +496,4 @@ FastAPI 自身の型検証(必須フィールドの欠落、整数でない値�
 
 画像生成はローカルだけで完結します。外部へ送るのは、プロンプトの展開(`/api/enhance-prompt`、または既定の `upsample=true`)で
 LLM サーバを使った場合だけで、依頼文と(編集では)参照画像を `KLEIN_PROMPT_LLM_URLS` の送信先に渡します。
-ローカル LLM を使った場合は外部へ送りません。
+ローカル LLM と公式版(`local`・`pup-int8`・`pup-gguf`)を使った場合は外部へ送りません。

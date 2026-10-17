@@ -44,6 +44,7 @@ FLUX 3 Image Klein Reference Studio（DiffusersサーバとGUIアプリ）は、
 | `boxes` | いいえ | 空文字 | 0〜1000座標のJSON配列、最大32件。配置は`{id, bbox, desc}`、編集は`{id, from, src_bbox, tgt_bbox, desc}`(`tgt_bbox: null`で削除)。座標は`[top, left, bottom, right]` |
 | `upsample` | いいえ | `true` | prompt upsampler。生成前にプロンプトを完全なキャプションへ展開(`/api/enhance-prompt`と同じ処理)。`false`でバイパス(比較用、または展開済みのキャプションを送るとき) |
 | `upsample_strict` | いいえ | `false` | `true`ならupsampleが使えないときに生成を止める(既定は元のプロンプトで生成し`warning`を付ける) |
+| `upsampler` | いいえ | `KLEIN_UPSAMPLER`(既定`auto`) | 使うLLM。`auto`、`remote`、`local`、`pup-int8`、`pup-gguf`(下の「prompt upsampler」) |
 
 参照画像を省略するとT2I、1枚以上指定するとI2I / Ref2Iになります。PNG、JPEG、WebPを推奨します。参照画像はVRAM使用量を抑えるため、枚数とモデルに応じて自動縮小されます。
 
@@ -61,11 +62,18 @@ FLUX 3 Image Klein Reference Studio（DiffusersサーバとGUIアプリ）は、
 | `mode` | いいえ | `auto` | `auto`(参照画像の有無で`t2i`/`i2i`)、`t2i`、`i2i`、`t2i_bbox`、`i2i_bbox` |
 | `image` | いいえ | なし | 編集の参照画像(最大8枚)。順番どおりLLMに見せる |
 | `width` / `height` | いいえ | なし | T2Iで出力の縦横比をLLMに伝える |
+| `upsampler` | いいえ | `KLEIN_UPSAMPLER`(既定`auto`) | 使うLLM(下の表) |
 
-BFL公式のシステムプロンプト(`models/flux-3-image-klein-pup/system_prompts.json`、無ければ自動取得)でLLMにキャプションを書かせます。編集では参照画像を依頼文より先に渡します。次の順に試し、どれも使えなければ`503`と理由を返します。
+BFL公式のシステムプロンプト(`models/flux-3-image-klein-pup/system_prompts.json`、無ければ自動取得)と公式の入力書式でLLMにキャプションを書かせます。編集では参照画像を依頼文より先に渡します。使えるLLMがなければ`503`と理由を返します。
 
-1. LLMサーバ(`KLEIN_PROMPT_LLM_URLS`、OpenAI互換のURLをカンマ区切りで書いた順に試す。未設定ならLLMサーバは使わない)
-2. ローカルのgemma-4-E4B(llama.cpp)。空きVRAMが十分ならGPU(使い終わったらすぐ停止)、そうでなく空きメモリとCPUに余裕があればCPU(数分使われなければ停止)
+| `upsampler` | 使うLLM |
+|---|---|
+| `auto` | LLMサーバ(`KLEIN_PROMPT_LLM_URLS`、書いた順)→ ローカルのgemma-4-E4B(llama.cpp。空きVRAMが十分ならGPU、なければCPU) |
+| `remote` / `local` | 上のどちらか一方だけ |
+| `pup-int8` | 公式upsamplerのINT8版(GPU、空きVRAM 12GiB以上) |
+| `pup-gguf` | 公式upsamplerのGGUF版Q4_K_M(GPU、空きVRAM 8GiB以上) |
+
+公式版(`pup-*`)は使うたびに起動し、使い終わったらすぐ止めます。空きVRAMが足りないときは画像モデルを一時的に解放してから起動します(生成中の`/api/enhance-prompt`では解放できないので`503`)。どれが使えるかは`GET /api/health`の`upsamplers`で分かります。
 
 ```json
 {"prompt": "Create a full-body front view photograph of the woman from the first image ...",

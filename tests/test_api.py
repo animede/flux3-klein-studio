@@ -230,3 +230,30 @@ def test_enhance_prompt_rejects_non_image_upload(client, monkeypatch):
     response = client.post('/api/enhance-prompt', data={'prompt': 'make it blue'},
                            files={'image': ('x.png', b'not an image', 'image/png')})
     assert response.status_code == 422
+
+
+def test_unknown_upsampler_is_rejected(client):
+    assert client.post('/api/generate', data={'prompt': 'apple', 'upsampler': 'bogus'}).status_code == 422
+    assert client.post('/api/enhance-prompt', data={'prompt': 'apple', 'upsampler': 'bogus'}).status_code == 422
+
+
+def test_generate_passes_the_upsampler_choice(client, monkeypatch):
+    seen = {}
+
+    def generate(model, prompt, ref, width, height, seed, progress, cancel):
+        return Image.new('RGB', (width, height)), {'seconds': 1}
+
+    def upsample(*args, **kwargs):
+        seen.update(kwargs)
+        return {'prompt': 'FULL', 'source': 'pup-gguf', 'model': 'm', 'mode': 't2i', 'cached': False}
+    monkeypatch.setattr(service.engine, 'generate', generate)
+    monkeypatch.setattr(service.upsampler, 'upsample', upsample)
+    state = wait_job(client, client.post('/api/generate', data={'prompt': 'apple', 'upsampler': 'pup-gguf'}).json()['id'])
+    assert state['upsampler'] == 'pup-gguf' and state['upsample_source'] == 'pup-gguf'
+    assert seen['backend'] == 'pup-gguf' and seen['release_vram'] == service.engine.unload
+
+
+def test_health_lists_upsamplers(client):
+    body = client.get('/api/health').json()
+    assert set(body['upsamplers']) == {'auto', 'remote', 'local', 'pup-int8', 'pup-gguf'}
+    assert body['default_upsampler'] in body['upsamplers']

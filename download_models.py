@@ -18,7 +18,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 from huggingface_hub import hf_hub_download, snapshot_download
 
-from model_config import MODELS
+from model_config import MODELS, PUP_MODELS
 
 
 def download_model(config):
@@ -37,6 +37,19 @@ def download_model(config):
     return result
 
 
+def download_pup(kind):
+    """Official prompt upsampler for local use: `int8` (BFL's INT8 ConvRot) and/or `gguf` (Q4_K_M + mmproj)."""
+    if kind in ("int8", "all"):
+        cfg = PUP_MODELS["config"]
+        snapshot_download(cfg["repo"], revision=cfg["revision"], local_dir=cfg["dir"], allow_patterns=cfg["patterns"])
+        item = PUP_MODELS["int8"]
+        hf_hub_download(item["repo"], item["file"], revision=item["revision"], local_dir=item["dir"])
+    if kind in ("gguf", "all"):
+        item = PUP_MODELS["gguf"]
+        for name in item["files"]:
+            hf_hub_download(item["repo"], name, revision=item["revision"], local_dir=item["dir"])
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description="Download pinned FLUX 3 Image Klein model files."
@@ -50,6 +63,13 @@ if __name__ == "__main__":
             "Required for FLUX 3 downloads."
         ),
     )
+    parser.add_argument(
+        "--pup", choices=["int8", "gguf", "all"],
+        help=(
+            "Also download the official prompt upsampler for local use: int8 (BFL's INT8 ConvRot, 9.8 GB, "
+            "about 12 GiB of free VRAM) and/or gguf (community Q4_K_M + mmproj, 6.5 GB, about 8 GiB)."
+        ),
+    )
     args = parser.parse_args()
     if not args.acknowledge_flux3_license:
         parser.error(
@@ -61,3 +81,6 @@ if __name__ == "__main__":
     with ThreadPoolExecutor(max_workers=1) as pool:
         print(pool.submit(download_model, MODELS[args.model]).result(), flush=True)
     print(f"Model download complete: {args.model}", flush=True)
+    if args.pup:
+        download_pup(args.pup)
+        print(f"Prompt upsampler download complete: {args.pup}", flush=True)

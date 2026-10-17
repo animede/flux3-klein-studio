@@ -43,8 +43,23 @@ or the prompt upsampler model.
 
 - Source: [black-forest-labs/flux-3-image-klein-pup](https://huggingface.co/black-forest-labs/flux-3-image-klein-pup)
 - License: Apache License 2.0
-- The application downloads only `system_prompts.json` from this repository and sends
-  those prompts to the configured LLM. The 9B upsampler model itself is not used.
+- By default the application downloads only `system_prompts.json` from this repository and
+  sends those prompts to the configured LLM. The bf16 upsampler weights are not downloaded.
+
+## Official prompt upsampler for local use (optional)
+
+`download_models.py flux3 --acknowledge-flux3-license --pup int8|gguf|all` downloads quantized
+builds of the official upsampler. They are not part of this repository.
+
+- `--pup int8`: `text_encoders/qwen3.5_9b_flux3_prompt_upsampler_int8_convrot.safetensors` from
+  [black-forest-labs/flux-3-image-klein-comfy](https://huggingface.co/black-forest-labs/flux-3-image-klein-comfy)
+  (pinned revision), plus the configuration, tokenizer and processor files of
+  `flux-3-image-klein-pup`. The underlying model is released under the Apache License 2.0; the
+  repository that distributes this file is covered by the FLUX Kommunity License v1.0, and you
+  must accept its gated terms to download it.
+- `--pup gguf`: `flux-3-image-klein-pup-Q4_K_M.gguf` and `mmproj-flux-3-image-klein-pup-F16.gguf`
+  from [rekuen/flux-3-image-klein-pup-GGUF](https://huggingface.co/rekuen/flux-3-image-klein-pup-GGUF)
+  (community-made, Apache License 2.0, pinned revision). It is not published by Black Forest Labs.
 
 ## Python packages
 

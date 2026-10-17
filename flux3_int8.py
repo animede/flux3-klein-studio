@@ -45,6 +45,7 @@ class ConvRotInt8Linear(nn.Module):
         *,
         compute_dtype: torch.dtype,
         convrot_groupsize: int = 256,
+        bias: torch.Tensor | None = None,
     ):
         super().__init__()
         self.in_features = in_features
@@ -53,6 +54,7 @@ class ConvRotInt8Linear(nn.Module):
         self.convrot_groupsize = convrot_groupsize
         self.register_buffer("weight", weight, persistent=True)
         self.register_buffer("weight_scale", weight_scale.float(), persistent=True)
+        self.register_buffer("bias", bias, persistent=True)
 
     def forward(self, inputs: torch.Tensor) -> torch.Tensor:
         import comfy_kitchen as ck
@@ -61,7 +63,7 @@ class ConvRotInt8Linear(nn.Module):
             inputs,
             self.weight,
             self.weight_scale,
-            None,
+            self.bias,
             self.compute_dtype,
             convrot=True,
             convrot_groupsize=self.convrot_groupsize,

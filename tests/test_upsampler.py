@@ -50,6 +50,10 @@ def test_edit_messages_put_images_before_text_and_t2i_gets_canvas():
     assert msgs[0]["content"] == "SYS-I2I"
     parts = msgs[1]["content"]
     assert [p["type"] for p in parts] == ["image_url", "image_url", "text"]
+    # Official scaffold and JPEG references, as in the official inference code.
+    assert parts[2]["text"] == ("Reference images follow in order (the first image, the second image, ...).\n"
+                                "User request: remove the bag\nOutput the caption.")
+    assert parts[0]["image_url"]["url"].startswith("data:image/jpeg;base64,")
     t2i = upsampler.build_messages("t2i", "an apple", width=1024, height=768)
     assert t2i[1]["content"].startswith("TARGET CANVAS: 1024:768\n")
 
@@ -60,7 +64,7 @@ def fake_backends(monkeypatch, alive, answers, multimodal=None):
     def model_info(url, timeout):
         return {"id": url.split("//")[1].split("/")[0] + "-model", "multimodal": (multimodal or {}).get(url)} if url in alive else None
 
-    def chat(url, model, messages, timeout):
+    def chat(url, model, messages, timeout, mode="t2i"):
         calls.append(url)
         if isinstance(answers.get(url), Exception):
             raise answers[url]
@@ -102,7 +106,7 @@ def test_results_are_cached(monkeypatch):
 def test_local_fallback_reports_why_it_is_unavailable(monkeypatch):
     monkeypatch.setenv("KLEIN_LOCAL_LLM", "1")
     fake_backends(monkeypatch, alive=set(), answers={})
-    monkeypatch.setattr(upsampler.local_llm, "choose_device", lambda need_vision: (None, "空きメモリ不足(3.0GiB)"))
+    monkeypatch.setattr(upsampler.local_llm, "choose_device", lambda need_vision, release_vram=None: (None, "空きメモリ不足(3.0GiB)"))
     with pytest.raises(upsampler.UpsampleUnavailable) as err:
         upsampler.upsample("an apple")
     assert "空きメモリ不足" in str(err.value)
@@ -112,3 +116,65 @@ def test_no_remote_llm_by_default(monkeypatch):
     monkeypatch.delenv("KLEIN_PROMPT_LLM_URLS", raising=False)
     monkeypatch.delenv("KLEIN_PROMPT_LLM_URL", raising=False)
     assert upsampler.remote_urls() == []
+
+
+def test_reference_size_follows_the_official_budget():
+    assert upsampler.reference_size(768, 768, 1) == (768, 768)
+    w, h = upsampler.reference_size(2048, 1536, 1)
+    assert w * h <= 1024 * 1024 and w % 32 == 0 and h % 32 == 0
+    w, h = upsampler.reference_size(1024, 768, 2)
+    assert w * h <= 724 * 724
+    w, h = upsampler.reference_size(1024, 768, 3)
+    assert w * h <= 512 * 512
+
+
+def test_backend_choice_is_validated_and_defaults_from_env(monkeypatch):
+    monkeypatch.delenv("KLEIN_UPSAMPLER", raising=False)
+    assert upsampler.resolve_backend(None) == "auto"
+    monkeypatch.setenv("KLEIN_UPSAMPLER", "pup-gguf")
+    assert upsampler.resolve_backend(None) == "pup-gguf" and upsampler.resolve_backend("remote") == "remote"
+    with pytest.raises(ValueError):
+        upsampler.resolve_backend("bogus")
+
+
+def test_official_backend_skips_remote_and_reports_its_source(monkeypatch):
+    calls = fake_backends(monkeypatch, alive={"http://big/v1"}, answers={"http://big/v1": "remote caption"})
+    seen = {}
+
+    def chat(messages, need_vision, mode, release_vram):
+        seen["release"] = release_vram
+        return "official caption", "pup-int8"
+    monkeypatch.setattr(upsampler.pup_int8, "chat", chat)
+    release = lambda: None  # noqa: E731
+    out = upsampler.upsample("an apple", backend="pup-int8", release_vram=release)
+    assert out["prompt"] == "official caption" and out["source"] == "pup-int8" and calls == []
+    assert seen["release"] is release
+    # Different backends are cached separately.
+    assert upsampler.upsample("an apple", backend="remote")["prompt"] == "remote caption"
+
+
+def test_official_backend_releases_vram_when_short(monkeypatch):
+    server = upsampler.PupGGUF()
+    monkeypatch.setattr(server, "missing", lambda: None)
+    free = {"gib": 3.0}
+    monkeypatch.setattr(server, "free_vram_gib", lambda: free["gib"])
+
+    def release():
+        free["gib"] = 20.0
+    assert server.choose_device(True, release) == ("gpu", "空き VRAM 20.0GiB")
+    free["gib"] = 3.0
+    device, reason = server.choose_device(True, None)
+    assert device is None and "空き VRAM が足りません" in reason
+
+
+def test_convrot_rows_dequantize_back_to_the_original():
+    import torch
+    from pup_int8 import _hadamard, dequantize_convrot_rows
+
+    torch.manual_seed(0)
+    weight = torch.randn(8, 512)
+    rotated = (weight.reshape(8, 2, 256) @ _hadamard(256, "cpu").T).reshape(8, 512)  # W @ H^T per group
+    scale = rotated.abs().amax(dim=1, keepdim=True) / 127
+    q = torch.round(rotated / scale).to(torch.int8)
+    restored = dequantize_convrot_rows(q, scale, 256, torch.float32)
+    assert torch.allclose(restored, weight, atol=0.05)

@@ -34,8 +34,13 @@ License: FLUX Kommunity License (a Derivative of FLUX 3 Image Klein)
 FLUX 3 Image Klein prompt upsampler (flux-3-image-klein-pup)
 https://huggingface.co/black-forest-labs/flux-3-image-klein-pup
 License: Apache License 2.0
-This application downloads only the official system prompts
-(system_prompts.json) from that repository. The upsampler model itself is not used.
+By default this application downloads only the official system prompts
+(system_prompts.json) from that repository. Optionally (download_models.py --pup) it
+downloads quantized builds of the upsampler for local use:
+  - INT8 ConvRot build published by Black Forest Labs in
+    https://huggingface.co/black-forest-labs/flux-3-image-klein-comfy
+  - Community Q4_K_M GGUF with its vision projector (Apache License 2.0):
+    https://huggingface.co/rekuen/flux-3-image-klein-pup-GGUF
 
 FLUX and Black Forest Labs are trademarks of their respective owners. This
 project is an independent work and is not affiliated with or endorsed by

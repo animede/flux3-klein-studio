@@ -50,11 +50,11 @@ Base is not a "higher-quality version for everyday use"; it is the base model fo
 
 The official distilled INT8 ConvRot Transformer from the Comfy distribution is connected directly to the Diffusers ModularPipeline. The pipeline runs in stages: the ~5.43 GiB Transformer stays on the GPU, and the Qwen3-VL text encoder runs on the CPU. The default CUDA allocator limit is 8 GiB. ComfyUI is not used.
 
-The model card requires a prompt upsampler (short prompts give generic output, and a one-line edit instruction can change the whole composition). Instead of the 18.8 GB official upsampler, this app runs an LLM with BFL's official system prompts (t2i / i2i / t2i_bbox / i2i_bbox). **The prompt upsampler is on by default**: every generation first expands the input into a full caption.
+The model card requires a prompt upsampler (short prompts give generic output, and a one-line edit instruction can change the whole composition). This app runs a local LLM with BFL's official system prompts (t2i / i2i / t2i_bbox / i2i_bbox) and the official input format. If you have GPU headroom, you can also use the official upsampler (quantized) (see "Using the official upsampler" below). **The prompt upsampler is on by default**: every generation first expands the input into a full caption.
 For comparison, you can generate without it (bypass): uncheck "prompt upsamplerを使う" (use the prompt upsampler) in the GUI, or send `upsample=false` to the API.
 To review the caption before generating, use the "prompt upsamplerで展開して確認" (expand and review) button in the GUI or `POST /api/enhance-prompt` (generating with the reviewed caption unchanged does not expand it again). For edits, the reference images are shown to the LLM as well.
 
-LLMs are tried in this order. If none is available, the original prompt is used and the reason is returned as a warning (with `upsample_strict=true`, the job fails instead).
+Choose the LLM with "prompt upsamplerのLLM" (prompt upsampler LLM) in the GUI, `upsampler` in the API, or the `KLEIN_UPSAMPLER` environment variable at startup. The default, `auto`, tries them in this order. If none is available, the original prompt is used and the reason is returned as a warning (with `upsample_strict=true`, the job fails instead).
 
 1. LLM servers: `KLEIN_PROMPT_LLM_URLS` (comma-separated OpenAI-compatible URLs, tried in order, e.g. `http://127.0.0.1:8080/v1`. If unset, no LLM server is used)
 2. Local gemma-4-E4B (llama.cpp `llama-server` with an mmproj for image input)
@@ -65,6 +65,32 @@ LLMs are tried in this order. If none is available, the original prompt is used 
      Build the CPU version with `cmake -B build-cpu -DGGML_NATIVE=ON -DGGML_CUDA=OFF && cmake --build build-cpu --target llama-server`
      (about 10 tokens/s on an i5-12400F, 20–40 s per expansion)
    - Related settings: `KLEIN_LOCAL_LLM_SERVER` (GPU build), `KLEIN_LOCAL_LLM_MODEL`, `KLEIN_LOCAL_LLM_MMPROJ`, `KLEIN_LOCAL_LLM_PORT` (default 7865); `KLEIN_LOCAL_LLM=0` disables it
+
+| `upsampler` | LLM used |
+|---|---|
+| `auto` (default) | LLM servers → local gemma-4-E4B |
+| `remote` | LLM servers only |
+| `local` | Local gemma-4-E4B only |
+| `pup-int8` | INT8 version of the official upsampler (official BFL release) |
+| `pup-gguf` | GGUF version of the official upsampler (Q4_K_M, community-made) |
+
+#### Using the official upsampler
+
+The official upsampler ([flux-3-image-klein-pup](https://huggingface.co/black-forest-labs/flux-3-image-klein-pup), based on Qwen3.5-9B, Apache-2.0) is an LLM tuned for FLUX 3.
+It is better than gemma-4 at phrasing that preserves the reference image's composition and at fleshing out scenes, but it sometimes adds text that was not requested.
+The bf16 version is 18.8 GB, so this app uses quantized versions. Both **assume VRAM use beyond the 8 GB target**.
+
+| | `pup-int8` | `pup-gguf` |
+|---|---|---|
+| Files | Official BFL `qwen3.5_9b_flux3_prompt_upsampler_int8_convrot` (9.8 GB, [flux-3-image-klein-comfy](https://huggingface.co/black-forest-labs/flux-3-image-klein-comfy)) | Community-made Q4_K_M + mmproj (6.5 GB, [rekuen/flux-3-image-klein-pup-GGUF](https://huggingface.co/rekuen/flux-3-image-klein-pup-GGUF)) |
+| Runs with | `pup_server.py` (Transformers + comfy-kitchen INT8 kernels) | llama.cpp `llama-server` |
+| Free VRAM required (default) | 12 GiB (`KLEIN_PUP_INT8_MIN_FREE_GIB`) | 8 GiB (`KLEIN_PUP_GGUF_MIN_FREE_GIB`) |
+| Measured (RTX PRO 4000 24GB) | Peak 9.4 GiB, about 19 s per expansion including startup | About 6.8 GiB, about 8 s per expansion including startup |
+
+- It is started on the GPU on each use and stopped right afterwards (to give the VRAM back to the image model).
+- If free VRAM is insufficient, the image model is temporarily released before starting (it is reloaded on the next generation).
+- Download: after `./setup.sh flux3 --acknowledge-flux3-license`, run `.venv/bin/python download_models.py flux3 --acknowledge-flux3-license --pup int8` (`gguf` or `all` also work)
+- Related settings: `KLEIN_PUP_INT8_PORT` (default 7867), `KLEIN_PUP_GGUF_PORT` (default 7866). The GGUF version uses the GPU build of llama-server (`KLEIN_LOCAL_LLM_SERVER`).
 
 A CUDA 13 environment and the ConvRot kernels from `comfy-kitchen` are required.
 
@@ -88,6 +114,7 @@ The model is gated, so log in with `hf auth login` or set the `HF_TOKEN` environ
 3. Downloads the models into `models/` with `download_models.py` (the base model, the INT8 version, and the outpaint LoRA)
 
 To install only the dependencies, use `./setup.sh none`. Setup is not needed for later launches.
+To also use the official upsampler, download it afterwards with `.venv/bin/python download_models.py flux3 --acknowledge-flux3-license --pup int8` (or `gguf`, `all`).
 
 ### 2. Start the FastAPI server
 
@@ -113,6 +140,7 @@ Main environment variables at startup:
 | `KLEIN_PORT` | `7864` | Port |
 | `KLEIN_MEMORY_BUDGET_GIB` | `8.0` | PyTorch GPU allocation limit (GiB) |
 | `KLEIN_PROMPT_LLM_URLS` | | LLM servers for the prompt upsampler (OpenAI-compatible, comma-separated) |
+| `KLEIN_UPSAMPLER` | `auto` | Default upsampler (`auto` / `remote` / `local` / `pup-int8` / `pup-gguf`) |
 
 ```bash
 KLEIN_PROMPT_LLM_URLS=http://127.0.0.1:8080/v1 CUDA_VISIBLE_DEVICES=0 ./run.sh
@@ -134,7 +162,7 @@ The latter has no authentication, so use it only on a trusted network.
 ### Data sent externally
 
 Image generation runs entirely on local files. Because the prompt upsampler is on by default, if `KLEIN_PROMPT_LLM_URLS` is set, the prompt and (for edits) the reference images are sent to those LLM servers on every generation.
-If `KLEIN_PROMPT_LLM_URLS` is not set, no LLM server is used and expansion runs only on the local LLM (llama.cpp), so nothing is sent externally. Nothing is sent when the upsampler is bypassed (`upsample=false`) either.
+If `KLEIN_PROMPT_LLM_URLS` is not set, no LLM server is used and expansion runs only on the local LLM (llama.cpp), so nothing is sent externally. Nothing is sent when `local`, `pup-int8`, or `pup-gguf` is selected, or when the upsampler is bypassed (`upsample=false`), either.
 
 ## API
 
@@ -193,7 +221,9 @@ The Apache License 2.0 does not apply to the models.
 |---|---|
 | [FLUX 3 Image Klein](https://huggingface.co/black-forest-labs/flux-3-image-klein) (INT8 version from [flux-3-image-klein-comfy](https://huggingface.co/black-forest-labs/flux-3-image-klein-comfy)) | [FLUX Kommunity License v1.0](https://huggingface.co/black-forest-labs/flux-3-image-klein/blob/main/LICENSE.md), [Usage Policy](https://bfl.ai/legal/usage-policy) |
 | [FLUX 3 Image Klein Outpaint LoRA](https://huggingface.co/ausboss/FLUX-3-Image-Klein-Outpaint-LoRA) (community-made, optional) | FLUX Kommunity License |
-| [flux-3-image-klein-pup](https://huggingface.co/black-forest-labs/flux-3-image-klein-pup) (only `system_prompts.json` is downloaded) | Apache License 2.0 |
+| [flux-3-image-klein-pup](https://huggingface.co/black-forest-labs/flux-3-image-klein-pup) (by default only `system_prompts.json` is downloaded; `--pup int8` also downloads the config files) | Apache License 2.0 |
+| INT8 version of the official upsampler (`--pup int8`, in [flux-3-image-klein-comfy](https://huggingface.co/black-forest-labs/flux-3-image-klein-comfy)) | The original model is Apache License 2.0; the distributing repository is under the FLUX Kommunity License v1.0 |
+| [rekuen/flux-3-image-klein-pup-GGUF](https://huggingface.co/rekuen/flux-3-image-klein-pup-GGUF) (`--pup gguf`, community-made) | Apache License 2.0 |
 | [FLUX 3 Image Klein Base](https://huggingface.co/black-forest-labs/flux-3-image-klein-base) (for comparison; not used by the app) | FLUX Kommunity License v1.0 |
 
 The official notice for FLUX 3 Image Klein (`NOTICE.md` in the model repository), reproduced verbatim:
