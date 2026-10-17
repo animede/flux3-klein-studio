@@ -25,6 +25,8 @@ FLUX 3 Image Klein Reference Studio（DiffusersサーバとGUIアプリ）は、
 | `GET` | `/api/jobs/{job_id}` | ジョブ状態を取得 |
 | `POST` | `/api/jobs/{job_id}/cancel` | ジョブの停止を要求 |
 | `POST` | `/api/unload` | 現在のモデルをCPU/GPUメモリから解放 |
+| `GET` | `/api/gallery` | 生成画像の一覧(新しい順) |
+| `DELETE` | `/api/gallery/{id}` | 生成画像を削除(メタデータと参照画像も) |
 
 ## 画像生成
 
@@ -215,6 +217,16 @@ curl -X POST http://127.0.0.1:7864/api/unload
 
 停止要求は生成中ならステップの区切りで反映されます(通常1〜2秒以内)。モデル読み込み中は即時停止できません。生成中に`/api/unload`を呼ぶと`409 Conflict`になります。
 
+## ギャラリー(生成画像の一覧と削除)
+
+```bash
+curl 'http://127.0.0.1:7864/api/gallery?limit=60&offset=0'
+curl -X DELETE http://127.0.0.1:7864/api/gallery/JOB_ID
+```
+
+一覧は`outputs/`のPNGを新しい順に返します(`total`と`items`。各要素は`id`、`image_url`、`metadata_url`、`created_at`、`width`、`height`、`seed`、`prompt`、`original_prompt`、`upsampler`、`upsample_source`、`reference_count`)。サーバーを再起動しても、ファイルが残っていれば一覧に出ます。
+削除は、PNG・メタデータJSON・そのジョブの参照画像(`uploads/`)を消します。IDは32桁の16進数だけを受け付け、生成中のジョブは`409`になります。
+
 ## モデル・状態確認
 
 ```bash
@@ -228,8 +240,8 @@ curl http://127.0.0.1:7864/api/health
 
 | 状態コード | 主な原因 |
 |---:|---|
-| `404` | 指定したジョブが存在しない |
-| `409` | 別の生成を実行中、モデル未取得、生成中のモデル解放 |
+| `404` | 指定したジョブ・画像が存在しない |
+| `409` | 別の生成を実行中、モデル未取得、生成中のモデル解放、生成中の画像の削除 |
 | `413` | 参照画像が1枚10MBを超過 |
 | `503` | `/api/enhance-prompt`で使えるLLMが無い(理由を`detail`に格納) |
 | `422` | 入力範囲外、未対応モデル、画像形式または画像内容を読み込めない |
@@ -242,4 +254,4 @@ curl http://127.0.0.1:7864/api/health
 - サーバーを再起動するとジョブ状態は消えます。
 - 生成PNGとJSONメタデータは`outputs/`へ保存します。
 - 参照画像は`uploads/`へ保存します。
-- 保存ファイルは自動削除されません。
+- 保存ファイルは自動削除されません。ギャラリー(画面または`DELETE /api/gallery/{id}`)で削除できます。

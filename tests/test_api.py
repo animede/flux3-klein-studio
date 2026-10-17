@@ -257,3 +257,34 @@ def test_health_lists_upsamplers(client):
     body = client.get('/api/health').json()
     assert set(body['upsamplers']) == {'auto', 'remote', 'local', 'pup-int8', 'pup-gguf'}
     assert body['default_upsampler'] in body['upsamplers']
+
+
+def test_gallery_lists_newest_first_and_deletes_files(client, monkeypatch):
+    def generate(model, prompt, ref, width, height, seed, progress, cancel):
+        return Image.new('RGB', (width, height)), {'seconds': 1}
+    monkeypatch.setattr(service.engine, 'generate', generate)
+    first = wait_job(client, client.post('/api/generate', data={'prompt': 'one', 'upsample': 'false'},
+                                         files={'image': ('r.png', png_bytes())}).json()['id'])
+    time.sleep(0.02)
+    second = wait_job(client, client.post('/api/generate', data={'prompt': 'two', 'upsample': 'false', 'seed': 5}).json()['id'])
+    body = client.get('/api/gallery').json()
+    assert body['total'] == 2 and [i['id'] for i in body['items']] == [second['id'], first['id']]
+    item = body['items'][0]
+    assert item['prompt'] == 'two' and item['seed'] == 5 and item['image_url'] == f"/outputs/{second['id']}.png"
+    assert client.get('/api/gallery', params={'limit': 1, 'offset': 1}).json()['items'][0]['id'] == first['id']
+
+    deleted = client.delete(f"/api/gallery/{first['id']}").json()['deleted']
+    assert f"{first['id']}.png" in deleted and f"{first['id']}.json" in deleted and f"{first['id']}_ref_1.png" in deleted
+    assert not (service.OUTPUTS / f"{first['id']}.png").exists()
+    assert client.get('/api/gallery').json()['total'] == 1
+    assert client.delete(f"/api/gallery/{first['id']}").status_code == 404
+
+
+def test_gallery_delete_rejects_bad_ids_and_running_jobs(client):
+    assert client.delete('/api/gallery/..%2Fapp').status_code in (404, 405)
+    assert client.delete('/api/gallery/not-a-job-id').status_code == 404
+    job_id = 'a' * 32
+    (service.OUTPUTS / f'{job_id}.png').write_bytes(png_bytes())
+    service.jobs[job_id] = {'id': job_id, 'status': 'generating', 'cancel': threading.Event()}
+    assert client.delete(f'/api/gallery/{job_id}').status_code == 409
+    assert (service.OUTPUTS / f'{job_id}.png').exists()

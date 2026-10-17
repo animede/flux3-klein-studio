@@ -155,6 +155,13 @@ The web app is served by the server from step 2 on the same port, so nothing els
 - Web app: http://127.0.0.1:7864/
 - API UI (Swagger UI): http://127.0.0.1:7864/docs
 
+The left side holds the inputs (reference images, request, prompt upsampler settings); the right side switches between the "生成結果" (Result) and "ギャラリー" (Gallery) tabs (`http://127.0.0.1:7864/#gallery` opens the gallery directly).
+Because the left side stays visible, you can drag a result or gallery image onto the reference images on the left to use it as a reference for the next generation (or use the "参照に追加" (Add as reference) button).
+
+- Inputs: layout control (bounding boxes) is collapsed; expand it when needed.
+- Result: shown in the aspect ratio of the output size and kept on screen while scrolling. The image can be downloaded.
+- Gallery: shows previously generated images, newest first. Click an image to enlarge it (with its prompt, seed, and upsampler; use ←/→ to move between images), download it, add it as a reference, or delete it. Deleting also removes its settings JSON and reference images.
+
 By default the server listens only on `127.0.0.1`, so it can be opened only from a browser on the same machine.
 To use it from another machine, use SSH port forwarding (`ssh -L 7864:127.0.0.1:7864 <server>`) or start it with `KLEIN_HOST=0.0.0.0`.
 The latter has no authentication, so use it only on a trusted network.
@@ -181,6 +188,7 @@ curl -X POST http://127.0.0.1:7864/api/generate \
 - `GET /api/jobs/JOB_ID`: generation progress and the model used
 - `POST /api/jobs/JOB_ID/cancel`: cancel a job
 - `POST /api/unload`: release the current model
+- `GET /api/gallery` / `DELETE /api/gallery/{id}`: list and delete generated images
 
 See the [API guide](docs/API.en.md) for usage and the [API reference](docs/API_REFERENCE.en.md) for every endpoint's inputs, outputs, and errors. While the server is running, Swagger UI (`/docs`), ReDoc (`/redoc`), and the OpenAPI JSON (`/openapi.json`) are also available.
 

@@ -22,6 +22,8 @@ FLUX 3 Image Klein Reference Studio の HTTP API の全エンドポイント、�
 | `GET` | [`/api/jobs/{job_id}`](#get-apijobsjob_id) | ジョブの状態 | `200` |
 | `POST` | [`/api/jobs/{job_id}/cancel`](#post-apijobsjob_idcancel) | ジョブの停止を要求 | `200` |
 | `POST` | [`/api/unload`](#post-apiunload) | モデルをメモリから解放 | `200` |
+| `GET` | [`/api/gallery`](#get-apigallery) | 生成画像の一覧(新しい順) | `200` |
+| `DELETE` | [`/api/gallery/{id}`](#delete-apigalleryid) | 生成画像を削除 | `200` |
 | `GET` | [`/outputs/{file}`](#get-outputsfile) | 生成した PNG とメタデータ JSON | `200` |
 | `GET` | `/` | Web 画面 | `200` |
 
@@ -330,6 +332,60 @@ curl -X POST http://127.0.0.1:7864/api/generate \
 
 ---
 
+## `GET /api/gallery`
+
+`outputs/` にある生成画像を、新しい順(ファイルの更新時刻順)に返します。ジョブの記録(直近 100 件、再起動で消える)とは別に、
+ファイルが残っている画像はすべて対象です。
+
+### クエリパラメータ
+
+| 名前 | 既定値 | 内容 |
+|---|---|---|
+| `limit` | `60` | 返す件数(1〜500 に丸める) |
+| `offset` | `0` | 先頭から飛ばす件数 |
+
+### レスポンス `200`
+
+| フィールド | 型 | 内容 |
+|---|---|---|
+| `total` | integer | 画像の総数 |
+| `items` | [`GalleryItem`](#galleryitem)[] | 画像の一覧 |
+
+### `GalleryItem`
+
+| フィールド | 型 | 内容 |
+|---|---|---|
+| `id` | string | ジョブ ID(32 桁の 16 進数) |
+| `image_url` | string | PNG の URL(`/outputs/{id}.png`) |
+| `metadata_url` | string \| null | メタデータ JSON の URL。ファイルがなければ `null` |
+| `created_at` | number | 生成時刻(ファイルの更新時刻、UNIX 秒) |
+| `width` / `height` / `seed` | integer \| null | 生成条件(メタデータから) |
+| `prompt` | string \| null | モデルに渡したプロンプト |
+| `original_prompt` | string \| null | 展開前の依頼文 |
+| `upsampler` / `upsample_source` | string \| null | 選んだ upsampler と、実際に使った LLM |
+| `reference_count` | integer | 参照画像の枚数 |
+
+---
+
+## `DELETE /api/gallery/{id}`
+
+生成画像を削除します。PNG、メタデータ JSON、そのジョブの参照画像(`uploads/{id}_ref_*.png`)を消します。元に戻せません。
+
+### レスポンス `200`
+
+```json
+{"id": "a12b34c56d78e90f...", "deleted": ["a12b....png", "a12b....json", "a12b..._ref_1.png"]}
+```
+
+### エラー
+
+| コード | 原因 |
+|---|---|
+| `404` | ID が 32 桁の 16 進数でない、または画像が存在しない |
+| `409` | そのジョブが生成中(終了状態でない) |
+
+---
+
 ## `GET /outputs/{file}`
 
 `JobResponse` の `image_url`(`/outputs/{job_id}.png`)と `metadata_url`(`/outputs/{job_id}.json`)で示されるファイルです。
@@ -490,7 +546,7 @@ FastAPI 自身の型検証(必須フィールドの欠落、整数でない値�
 | `boxes` | 32 件まで |
 | メモリに保持するジョブ | 直近 100 件(再起動で消える) |
 | upsampler のキャッシュ | 直近 128 件(再起動で消える) |
-| 保存先 | 生成画像とメタデータは `outputs/`、参照画像は `uploads/`。自動削除なし |
+| 保存先 | 生成画像とメタデータは `outputs/`、参照画像は `uploads/`。自動削除なし(`DELETE /api/gallery/{id}` で削除) |
 
 ## データの送信先
 

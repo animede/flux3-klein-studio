@@ -16,6 +16,7 @@ import io
 import json
 import logging
 import math
+import re
 import secrets
 import threading
 import time
@@ -44,6 +45,15 @@ MAX_REFERENCES = 8
 REFERENCE_MAX_SIDE = 768
 
 app = FastAPI(title="FLUX 3 Image Klein Reference Studio（DiffusersサーバとGUIアプリ）", version="0.3.0", description="FLUX 3 Image KleinをDiffusersで動かし、8GBのVRAMに収めた画像生成・編集サーバーです。")
+@app.middleware("http")
+async def _revalidate_gui(request, call_next):
+    # Make browsers revalidate the GUI after an update instead of running a stale app.js.
+    response = await call_next(request)
+    if request.url.path == "/" or request.url.path.startswith("/static/"):
+        response.headers["Cache-Control"] = "no-cache"
+    return response
+
+
 app.mount("/outputs", StaticFiles(directory=OUTPUTS), name="outputs")
 app.mount("/static", StaticFiles(directory=ROOT / "static"), name="static")
 engine = Engine()
@@ -104,6 +114,26 @@ class JobResponse(BaseModel):
     upsampler: str = "auto"
     upsample_source: str | None = None
     warning: str | None = None
+
+
+class GalleryItem(BaseModel):
+    id: str
+    image_url: str
+    metadata_url: str | None
+    created_at: float
+    width: int | None = None
+    height: int | None = None
+    seed: int | None = None
+    prompt: str | None = None
+    original_prompt: str | None = None
+    upsampler: str | None = None
+    upsample_source: str | None = None
+    reference_count: int = 0
+
+
+class GalleryResponse(BaseModel):
+    total: int
+    items: list[GalleryItem]
 
 
 class UnloadResponse(BaseModel):
@@ -191,6 +221,57 @@ def unload():
         return {"status": "ok", "loaded": False}
     finally:
         engine.lock.release()
+
+
+JOB_ID = re.compile(r"[0-9a-f]{32}")
+
+
+def gallery_item(image: Path) -> dict:
+    meta = {}
+    metadata = image.with_suffix(".json")
+    if metadata.is_file():
+        try:
+            meta = json.loads(metadata.read_text())
+        except (OSError, ValueError):
+            meta = {}
+    return {
+        "id": image.stem, "image_url": f"/outputs/{image.name}",
+        "metadata_url": f"/outputs/{metadata.name}" if metadata.is_file() else None,
+        "created_at": image.stat().st_mtime,
+        **{key: meta.get(key) for key in ("width", "height", "seed", "prompt", "original_prompt",
+                                          "upsampler", "upsample_source")},
+        "reference_count": meta.get("reference_count") or 0,
+    }
+
+
+@app.get("/api/gallery", response_model=GalleryResponse, summary="生成画像の一覧(新しい順)")
+def gallery(limit: int = 60, offset: int = 0):
+    limit = max(1, min(limit, 500))
+    offset = max(0, offset)
+    images = sorted((p for p in OUTPUTS.glob("*.png") if JOB_ID.fullmatch(p.stem)),
+                    key=lambda p: p.stat().st_mtime, reverse=True)
+    return {"total": len(images), "items": [gallery_item(p) for p in images[offset:offset + limit]]}
+
+
+@app.delete("/api/gallery/{image_id}", summary="生成画像を削除",
+            responses={404: {"description": "画像が存在しません"}, 409: {"description": "生成中のジョブです"}})
+def delete_gallery_item(image_id: str):
+    """PNG、メタデータJSON、そのジョブの参照画像(uploads/)を削除する。"""
+    if not JOB_ID.fullmatch(image_id):
+        raise HTTPException(404, "画像が見つかりません。")
+    with jobs_lock:
+        job = jobs.get(image_id)
+        if job and job["status"] not in {"done", "error", "cancelled"}:
+            raise HTTPException(409, "生成中の画像は削除できません。")
+    image = OUTPUTS / f"{image_id}.png"
+    if not image.is_file():
+        raise HTTPException(404, "画像が見つかりません。")
+    removed = []
+    for path in [image, OUTPUTS / f"{image_id}.json", *UPLOADS.glob(f"{image_id}_ref_*.png")]:
+        if path.is_file():
+            path.unlink()
+            removed.append(path.name)
+    return {"id": image_id, "deleted": removed}
 
 
 def reference_max_side(count: int, model_key: str = DEFAULT_MODEL) -> int:

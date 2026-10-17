@@ -22,6 +22,8 @@ For the overall workflow and usage examples, see the [API specification (guide)]
 | `GET` | [`/api/jobs/{job_id}`](#get-apijobsjob_id) | Job status | `200` |
 | `POST` | [`/api/jobs/{job_id}/cancel`](#post-apijobsjob_idcancel) | Request a job to stop | `200` |
 | `POST` | [`/api/unload`](#post-apiunload) | Release the model from memory | `200` |
+| `GET` | [`/api/gallery`](#get-apigallery) | List generated images (newest first) | `200` |
+| `DELETE` | [`/api/gallery/{id}`](#delete-apigalleryid) | Delete a generated image | `200` |
 | `GET` | [`/outputs/{file}`](#get-outputsfile) | Generated PNG and metadata JSON | `200` |
 | `GET` | `/` | Web UI | `200` |
 
@@ -330,6 +332,60 @@ Use this when sharing the GPU with other applications.
 
 ---
 
+## `GET /api/gallery`
+
+Returns the generated images in `outputs/`, newest first (by file modification time). Independent of the job records (latest 100, cleared on restart),
+every image whose file still exists is included.
+
+### Query parameters
+
+| Name | Default | Description |
+|---|---|---|
+| `limit` | `60` | Number of items to return (clamped to 1–500) |
+| `offset` | `0` | Number of items to skip from the start |
+
+### Response `200`
+
+| Field | Type | Description |
+|---|---|---|
+| `total` | integer | Total number of images |
+| `items` | [`GalleryItem`](#galleryitem)[] | List of images |
+
+### `GalleryItem`
+
+| Field | Type | Description |
+|---|---|---|
+| `id` | string | Job ID (32-digit hexadecimal) |
+| `image_url` | string | PNG URL (`/outputs/{id}.png`) |
+| `metadata_url` | string \| null | Metadata JSON URL. `null` if the file is missing |
+| `created_at` | number | Generation time (file modification time, UNIX seconds) |
+| `width` / `height` / `seed` | integer \| null | Generation settings (from the metadata) |
+| `prompt` | string \| null | Prompt passed to the model |
+| `original_prompt` | string \| null | Request text before expansion |
+| `upsampler` / `upsample_source` | string \| null | Selected upsampler and the LLM actually used |
+| `reference_count` | integer | Number of reference images |
+
+---
+
+## `DELETE /api/gallery/{id}`
+
+Deletes a generated image: the PNG, the metadata JSON, and the job's reference images (`uploads/{id}_ref_*.png`). This cannot be undone.
+
+### Response `200`
+
+```json
+{"id": "a12b34c56d78e90f...", "deleted": ["a12b....png", "a12b....json", "a12b..._ref_1.png"]}
+```
+
+### Errors
+
+| Code | Cause |
+|---|---|
+| `404` | The ID is not 32-digit hexadecimal, or the image does not exist |
+| `409` | The job is still generating (not in a final state) |
+
+---
+
 ## `GET /outputs/{file}`
 
 The files pointed to by `image_url` (`/outputs/{job_id}.png`) and `metadata_url` (`/outputs/{job_id}.json`) in `JobResponse`.
@@ -492,7 +548,7 @@ They share `KLEIN_LOCAL_LLM_START_TIMEOUT_S` for the startup timeout and `KLEIN_
 | `boxes` | Up to 32 items |
 | Jobs kept in memory | Latest 100 (cleared on restart) |
 | Upsampler cache | Latest 128 (cleared on restart) |
-| Storage | Generated images and metadata in `outputs/`, reference images in `uploads/`. No automatic deletion |
+| Storage | Generated images and metadata in `outputs/`, reference images in `uploads/`. No automatic deletion (delete with `DELETE /api/gallery/{id}`) |
 
 ## Where data is sent
 

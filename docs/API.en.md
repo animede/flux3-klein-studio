@@ -25,6 +25,8 @@ By default the server listens only on `127.0.0.1`. If you expose it externally, 
 | `GET` | `/api/jobs/{job_id}` | Get job status |
 | `POST` | `/api/jobs/{job_id}/cancel` | Request that a job stop |
 | `POST` | `/api/unload` | Release the current model from CPU/GPU memory |
+| `GET` | `/api/gallery` | List generated images (newest first) |
+| `DELETE` | `/api/gallery/{id}` | Delete a generated image (with its metadata and reference images) |
 
 ## Image Generation
 
@@ -215,6 +217,16 @@ curl -X POST http://127.0.0.1:7864/api/unload
 
 During generation, a cancel request takes effect at the next step boundary (usually within 1–2 seconds). It cannot stop immediately while a model is loading. Calling `/api/unload` during generation returns `409 Conflict`.
 
+## Gallery (Listing and Deleting Generated Images)
+
+```bash
+curl 'http://127.0.0.1:7864/api/gallery?limit=60&offset=0'
+curl -X DELETE http://127.0.0.1:7864/api/gallery/JOB_ID
+```
+
+The list returns the PNGs in `outputs/`, newest first (`total` and `items`; each item has `id`, `image_url`, `metadata_url`, `created_at`, `width`, `height`, `seed`, `prompt`, `original_prompt`, `upsampler`, `upsample_source`, `reference_count`). Images remain listed after a server restart as long as the files exist.
+Deleting removes the PNG, the metadata JSON, and the job's reference images (`uploads/`). Only 32-digit hexadecimal IDs are accepted, and a job that is still generating returns `409`.
+
 ## Model and Status Checks
 
 ```bash
@@ -228,8 +240,8 @@ If `available` is `false`, accept the access conditions on the official distribu
 
 | Status code | Common causes |
 |---:|---|
-| `404` | The specified job does not exist |
-| `409` | Another generation is running, the model is not downloaded, or unload was requested during generation |
+| `404` | The specified job or image does not exist |
+| `409` | Another generation is running, the model is not downloaded, unload was requested during generation, or deletion of an image still being generated |
 | `413` | A reference image exceeds 10 MB |
 | `503` | No LLM is available for `/api/enhance-prompt` (reason in `detail`) |
 | `422` | Input out of range, unsupported model, or unreadable image format or content |
@@ -242,4 +254,4 @@ Error bodies are usually `{"detail":"description"}`. For FastAPI's own input typ
 - Job states are lost when the server restarts.
 - Generated PNGs and JSON metadata are saved to `outputs/`.
 - Reference images are saved to `uploads/`.
-- Saved files are not deleted automatically.
+- Saved files are not deleted automatically. They can be deleted from the gallery (in the UI or with `DELETE /api/gallery/{id}`).
