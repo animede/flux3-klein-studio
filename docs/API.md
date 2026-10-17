@@ -66,7 +66,7 @@ FLUX 3 Image Klein Reference Studio（DiffusersサーバとGUIアプリ）は、
 | `width` / `height` | いいえ | なし | T2Iで出力の縦横比をLLMに伝える |
 | `upsampler` | いいえ | `KLEIN_UPSAMPLER`(既定`auto`) | 使うLLM(下の表) |
 
-BFL公式のシステムプロンプト(`models/flux-3-image-klein-pup/system_prompts.json`、無ければ自動取得)と公式の入力書式でLLMにキャプションを書かせます。編集では参照画像を依頼文より先に渡します。使えるLLMがなければ`503`と理由を返します。
+外部のLLM(`auto`・`remote`・`local`)には、BFLが外部LLM向けに公開しているシステムプロンプト(`models/flux-3-image-klein-pup/system_prompts_external_vlm.json`、無ければ自動取得)を渡し、編集では依頼文(`User request: ...`)の後に参照画像を付けます。公式upsampler(`pup-*`)には、公式upsampler用のシステムプロンプト(`system_prompts.json`)と公式の書式(参照画像が先)を使います。使えるLLMがなければ`503`と理由を返します。
 
 | `upsampler` | 使うLLM |
 |---|---|

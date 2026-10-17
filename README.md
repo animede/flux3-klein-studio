@@ -50,7 +50,7 @@ Baseは「より高品質な通常利用版」ではなく、追加学習用の�
 
 FLUX 3は、公式Comfy配布のdistilled INT8 ConvRot TransformerをDiffusers ModularPipelineへ直接接続します。約5.43GiBのTransformerをGPUに置き、Qwen3-VLテキストエンコーダーはCPUで実行する段階式Pipelineです。既定のCUDA allocator上限は8GiBで、ComfyUIは使用しません。
 
-公式はprompt upsamplerの使用を必須としています(短い入力は平凡な出力になり、1行の編集指示は構図まで変えてしまう)。このアプリは、BFL公式のシステムプロンプト(t2i / i2i / t2i_bbox / i2i_bbox)と公式の入力書式で、手元のLLMを動かします。GPUに余裕があれば、公式のupsampler(量子化版)も使えます(下の「公式のupsamplerを使う」)。**prompt upsamplerは標準で有効**で、生成のたびに入力文を完全なキャプションへ展開してから生成します。
+公式はprompt upsamplerの使用を必須としています(短い入力は平凡な出力になり、1行の編集指示は構図まで変えてしまう)。このアプリは、BFLが外部のLLM向けに公開しているシステムプロンプト(`pup_prompts_external_vlm.json`、t2i / i2i / t2i_bbox / i2i_bbox)で、手元のLLMを動かします。GPUに余裕があれば、公式のupsampler(量子化版)も使えます(下の「公式のupsamplerを使う」)。**prompt upsamplerは標準で有効**で、生成のたびに入力文を完全なキャプションへ展開してから生成します。
 比較のために使わずに生成する(バイパス)こともできます。画面では「prompt upsamplerを使う」のチェックを外し、APIでは`upsample=false`を指定します。
 展開結果を生成前に確かめたいときは、画面の「prompt upsamplerで展開して確認」または`POST /api/enhance-prompt`を使います(確認したキャプションをそのまま生成すると、もう一度は展開しません)。編集では参照画像もLLMに見せます。
 
@@ -64,7 +64,9 @@ FLUX 3は、公式Comfy配布のdistilled INT8 ConvRot TransformerをDiffusers M
      GPU向けビルド(`GGML_NATIVE`/`AVX2`なし)をCPUで動かすと毎秒2トークン程度しか出ず、1回の展開に数分かかる。
      CPU向けは`cmake -B build-cpu -DGGML_NATIVE=ON -DGGML_CUDA=OFF && cmake --build build-cpu --target llama-server`で作れる
      (i5-12400Fで生成毎秒10トークン、1回20〜40秒)
-   - 関連する設定: `KLEIN_LOCAL_LLM_SERVER`(GPU用)、`KLEIN_LOCAL_LLM_MODEL`、`KLEIN_LOCAL_LLM_MMPROJ`、`KLEIN_LOCAL_LLM_PORT`(既定7865)、`KLEIN_LOCAL_LLM=0`で無効
+   - 関連する設定: `KLEIN_LOCAL_LLM_SERVER`(GPU用)、`KLEIN_LOCAL_LLM_MODEL`、`KLEIN_LOCAL_LLM_MMPROJ`、`KLEIN_LOCAL_LLM_PORT`(既定7865)、`KLEIN_LOCAL_LLM_CTX`(既定16384)、`KLEIN_LOCAL_LLM=0`で無効
+
+外部のLLM(LLMサーバとローカルのgemma)には、BFLが2026-10-17に公開した外部LLM向けのシステムプロンプトを渡します(初回に公式リポジトリの固定したコミットから自動取得)。T2I用は約1万トークンあるので、LLMのコンテキスト長は16K以上が必要です(LLMサーバは同じシステムプロンプトの処理結果を使い回すので、2回目以降は速くなります)。以前の動き(公式upsampler用のシステムプロンプトを外部のLLMにも使う)に戻すには`KLEIN_LLM_PROMPTS=pup`にします。公式upsampler(`pup-*`)には、常に公式upsampler用のシステムプロンプトと書式を使います。
 
 | `upsampler` | 使うLLM |
 |---|---|

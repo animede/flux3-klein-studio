@@ -35,7 +35,9 @@ FLUX 3 Image Klein prompt upsampler (flux-3-image-klein-pup)
 https://huggingface.co/black-forest-labs/flux-3-image-klein-pup
 License: Apache License 2.0
 By default this application downloads only the official system prompts
-(system_prompts.json) from that repository. Optionally (download_models.py --pup) it
+(system_prompts.json) from that repository, and BFL's system prompts for external
+LLMs (src/flux3/pup_prompts_external_vlm.json) from
+https://github.com/black-forest-labs/flux-3-image-klein (Apache License 2.0). Optionally (download_models.py --pup) it
 downloads quantized builds of the upsampler for local use:
   - INT8 ConvRot build published by Black Forest Labs in
     https://huggingface.co/black-forest-labs/flux-3-image-klein-comfy

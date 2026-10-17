@@ -104,7 +104,7 @@ Returns the server status, the loaded model, and whether model files are ready.
 ## `POST /api/enhance-prompt`
 
 Rewrites a short request into the full scene caption that FLUX 3 Image Klein expects.
-It passes BFL's official system prompts (`system_prompts.json` from `flux-3-image-klein-pup`) to an LLM.
+External LLMs (`auto`, `remote`, `local`) get the system prompts BFL publishes for external LLMs (`pup_prompts_external_vlm.json` in the official inference code); the official upsampler (`pup-*`) gets its own system prompts (`system_prompts.json` from `flux-3-image-klein-pup`).
 It does not generate an image. `/api/generate` performs the same expansion by default before generating, so use this endpoint to review or edit the expanded caption before generation.
 When generating with a reviewed caption, add `upsample=false` to `/api/generate` to avoid expanding it twice.
 
@@ -519,6 +519,8 @@ Read at server startup (also when started via `run.sh`).
 | `KLEIN_LOCAL_LLM_MODEL` | `~/models/gemma-4-E4B-it-Q4_K_M.gguf` | GGUF model |
 | `KLEIN_LOCAL_LLM_MMPROJ` | Auto-detected | mmproj for image input |
 | `KLEIN_LOCAL_LLM_PORT` | `7865` | llama-server port (`127.0.0.1` only) |
+| `KLEIN_LOCAL_LLM_CTX` | `16384` | llama-server context length (the external-LLM t2i system prompt is about 10K tokens) |
+| `KLEIN_LLM_PROMPTS` | `external` | System prompts for external LLMs: `external` (BFL's prompts for external LLMs) / `pup` (the official upsampler's prompts; the behaviour before 2026-10-18) |
 | `KLEIN_LOCAL_LLM_GPU_MIN_FREE_GIB` | `8` | Free VRAM required to run on the GPU (GiB) |
 | `KLEIN_LOCAL_LLM_CPU_MIN_RAM_GIB` | `10` | Free memory required to run on the CPU (GiB) |
 | `KLEIN_LOCAL_LLM_CPU_MAX_LOAD` | `0.75` | Maximum load for running on the CPU (1-minute average ÷ core count) |

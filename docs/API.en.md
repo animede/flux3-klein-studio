@@ -66,7 +66,7 @@ Following the model card format, `boxes` is appended after the caption as a JSON
 | `width` / `height` | No | None | Tells the LLM the output aspect ratio for T2I |
 | `upsampler` | No | `KLEIN_UPSAMPLER` (default `auto`) | LLM to use (table below) |
 
-The LLM writes the caption using BFL's official system prompts (`models/flux-3-image-klein-pup/system_prompts.json`, fetched automatically if missing) and the official input format. For edits, reference images are passed before the request text. If no LLM is available, `503` is returned with the reason.
+External LLMs (`auto`, `remote`, `local`) get the system prompts BFL publishes for external LLMs (`models/flux-3-image-klein-pup/system_prompts_external_vlm.json`, fetched automatically if missing); for edits the request (`User request: ...`) comes first and the reference images follow. The official upsampler (`pup-*`) gets its own system prompts (`system_prompts.json`) and the official format (reference images first). If no LLM is available, `503` is returned with the reason.
 
 | `upsampler` | LLM used |
 |---|---|

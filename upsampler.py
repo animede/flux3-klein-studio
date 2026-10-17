@@ -64,6 +64,11 @@ import model_config
 ROOT = Path(__file__).resolve().parent
 SYSTEM_PROMPTS_PATH = ROOT / "models" / "flux-3-image-klein-pup" / "system_prompts.json"
 PUP_REPO = "black-forest-labs/flux-3-image-klein-pup"
+# BFL's system prompts for external vision-language models (any LLM other than the official upsampler),
+# published in the inference code repository (Apache-2.0) on 2026-10-17. Pinned to that commit.
+EXTERNAL_PROMPTS_PATH = ROOT / "models" / "flux-3-image-klein-pup" / "system_prompts_external_vlm.json"
+EXTERNAL_PROMPTS_URL = ("https://raw.githubusercontent.com/black-forest-labs/flux-3-image-klein/"
+                        "458dcc00e4719f65be0d9a611d52d9cf86ba980d/src/flux3/pup_prompts_external_vlm.json")
 MODES = ("t2i", "i2i", "t2i_bbox", "i2i_bbox")
 BACKENDS = ("auto", "remote", "local", "pup-int8", "pup-gguf")
 
@@ -117,6 +122,37 @@ def system_prompts() -> dict:
 
 def system_prompt_for(mode: str) -> str:
     return system_prompts().get(mode) or _FALLBACK_SYSTEM
+
+
+_external_prompts: dict | None = None
+
+
+def external_prompts() -> dict:
+    """BFL's prompts for external VLMs; fetched once from the pinned commit. Empty when unavailable."""
+    global _external_prompts
+    with _system_lock:
+        if _external_prompts is not None:
+            return _external_prompts
+        if not EXTERNAL_PROMPTS_PATH.is_file():
+            try:
+                res = httpx.get(EXTERNAL_PROMPTS_URL, timeout=30, follow_redirects=True)
+                res.raise_for_status()
+                json.loads(res.text)
+                EXTERNAL_PROMPTS_PATH.parent.mkdir(parents=True, exist_ok=True)
+                EXTERNAL_PROMPTS_PATH.write_text(res.text)
+            except (httpx.HTTPError, ValueError, OSError) as exc:
+                log.warning("External-VLM system prompts unavailable (%s); using the upsampler prompts", exc)
+        try:
+            _external_prompts = json.loads(EXTERNAL_PROMPTS_PATH.read_text())
+        except (OSError, ValueError):
+            _external_prompts = {}
+        return _external_prompts
+
+
+def llm_prompt_style() -> str:
+    """Prompt set for LLMs other than the official upsampler: "external" (BFL's external-VLM prompts,
+    default) or "pup" (the upsampler's own prompts, the behaviour before 2026-10-18)."""
+    return "pup" if os.getenv("KLEIN_LLM_PROMPTS", "external").strip().lower() == "pup" else "external"
 
 
 # ---------------------------------------------------------------------------
@@ -178,11 +214,23 @@ def _image_part(image, n_refs: int = 1) -> dict:
     return {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode()}}
 
 
-def build_messages(mode: str, request: str, images=(), width: int | None = None, height: int | None = None) -> list:
+def build_messages(mode: str, request: str, images=(), width: int | None = None, height: int | None = None,
+                   style: str = "pup") -> list:
+    """`style="pup"`: the official upsampler's format (images first, three-line request).
+    `style="external"`: BFL's external-VLM prompts, whose edit prompts expect the request first
+    ("User request: ...") with the reference images attached after the text."""
     text = request.strip()
     if mode.startswith("t2i") and width and height:
-        # The t2i prompts accept a leading canvas line and never mention it in the caption.
+        # Both prompt sets accept a leading canvas line and never mention it in the caption.
         text = f"TARGET CANVAS: {width}:{height}\n{text}"
+    if style == "external" and external_prompts().get(mode):
+        system = external_prompts()[mode]
+        if mode.startswith("i2i") and images:
+            content = [{"type": "text", "text": f"User request: {text}"}]
+            content += [_image_part(img, len(images)) for img in images]
+        else:
+            content = text
+        return [{"role": "system", "content": system}, {"role": "user", "content": content}]
     if mode.startswith("i2i") and images:
         scaffold = I2I_BBOX_SCAFFOLD if mode == "i2i_bbox" else I2I_SCAFFOLD
         content = [_image_part(img, len(images)) for img in images]
@@ -193,7 +241,7 @@ def build_messages(mode: str, request: str, images=(), width: int | None = None,
 
 
 def _cache_key(backend: str, mode: str, request: str, images, width, height) -> str:
-    digest = hashlib.sha256(f"{backend}\n{mode}\n{width}x{height}\n{request}".encode())
+    digest = hashlib.sha256(f"{backend}\n{llm_prompt_style()}\n{mode}\n{width}x{height}\n{request}".encode())
     for img in images or ():
         if isinstance(img, (bytes, bytearray)):
             digest.update(bytes(img))
@@ -361,7 +409,7 @@ class LocalLLM:
         # --reasoning off: the model card runs the upsampler with thinking off; gemma-4 thinks by
         # default, which on the CPU meant minutes of reasoning tokens before the caption.
         cmd = [str(self.server_path(device)), "-m", str(self.model_path()), "--host", "127.0.0.1",
-               "--port", str(self.port()), "-c", "8192", "-ngl", "99" if device == "gpu" else "0",
+               "--port", str(self.port()), "-c", os.getenv("KLEIN_LOCAL_LLM_CTX", "16384"), "-ngl", "99" if device == "gpu" else "0",
                "-t", str(max(1, cpus // 2)), "--reasoning", "off"]
         mmproj = self.mmproj_path()
         if mmproj is not None:
@@ -580,7 +628,9 @@ def upsample(request: str, *, mode: str = "auto", images=(), width: int | None =
             _cache.move_to_end(key)
             return {**_cache[key], "cached": True}
 
+    # The official upsampler gets its own format; other LLMs get BFL's external-VLM prompts.
     messages = build_messages(mode, request, images, width, height)
+    llm_messages = build_messages(mode, request, images, width, height, style=llm_prompt_style())
     need_vision = mode.startswith("i2i") and bool(images)
     reasons: list[str] = []
     result: dict | None = None
@@ -604,7 +654,7 @@ def upsample(request: str, *, mode: str = "auto", images=(), width: int | None =
             continue
         model = override_model if (override_model and index == 0) else info.get("id")
         try:
-            text = _chat(url, model, messages, timeout=_env_float("KLEIN_PROMPT_LLM_TIMEOUT_S", 120.0), mode=mode)
+            text = _chat(url, model, llm_messages, timeout=_env_float("KLEIN_PROMPT_LLM_TIMEOUT_S", 120.0), mode=mode)
         except Exception as exc:  # noqa: BLE001
             reasons.append(f"{url}: {type(exc).__name__}")
             continue
@@ -613,7 +663,7 @@ def upsample(request: str, *, mode: str = "auto", images=(), width: int | None =
     if (result is None and use_local and backend in ("auto", "local")
             and os.getenv("KLEIN_LOCAL_LLM", "1") != "0"):
         try:
-            text, source = local_llm.chat(messages, need_vision, mode)
+            text, source = local_llm.chat(llm_messages, need_vision, mode)
             result = {"prompt": text, "mode": mode, "source": source, "model": local_llm.model_path().name}
         except UpsampleUnavailable as exc:
             reasons.append(f"ローカル LLM: {exc}")

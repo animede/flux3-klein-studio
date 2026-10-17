@@ -26,6 +26,8 @@ import upsampler
 def isolated(monkeypatch):
     upsampler._cache.clear()
     monkeypatch.setattr(upsampler, "_system_prompts", {"t2i": "SYS-T2I", "i2i": "SYS-I2I"})
+    monkeypatch.setattr(upsampler, "_external_prompts", {"t2i": "EXT-T2I", "i2i": "EXT-I2I"})
+    monkeypatch.delenv("KLEIN_LLM_PROMPTS", raising=False)
     monkeypatch.setenv("KLEIN_PROMPT_LLM_URLS", "http://big/v1,http://small/v1")
     monkeypatch.delenv("KLEIN_PROMPT_LLM_MODEL", raising=False)
     monkeypatch.setenv("KLEIN_LOCAL_LLM", "0")
@@ -178,3 +180,42 @@ def test_convrot_rows_dequantize_back_to_the_original():
     q = torch.round(rotated / scale).to(torch.int8)
     restored = dequantize_convrot_rows(q, scale, 256, torch.float32)
     assert torch.allclose(restored, weight, atol=0.05)
+
+
+def test_external_llms_get_bfl_external_prompts_with_the_request_first():
+    msgs = upsampler.build_messages("i2i", "remove the bag", [png(), png()], style="external")
+    assert msgs[0]["content"] == "EXT-I2I"
+    parts = msgs[1]["content"]
+    assert [p["type"] for p in parts] == ["text", "image_url", "image_url"]
+    assert parts[0]["text"] == "User request: remove the bag"
+    t2i = upsampler.build_messages("t2i", "an apple", width=1024, height=768, style="external")
+    assert t2i[0]["content"] == "EXT-T2I" and t2i[1]["content"].startswith("TARGET CANVAS: 1024:768\n")
+
+
+def test_remote_gets_external_prompts_and_official_gets_its_own(monkeypatch):
+    seen = {}
+
+    def model_info(url, timeout):
+        return {"id": "m", "multimodal": True}
+
+    def chat(url, model, messages, timeout, mode="t2i"):
+        seen["remote"] = messages[0]["content"]
+        return "remote caption"
+    monkeypatch.setattr(upsampler, "_model_info", model_info)
+    monkeypatch.setattr(upsampler, "_chat", chat)
+    upsampler.upsample("an apple", backend="remote")
+    assert seen["remote"] == "EXT-T2I"
+
+    def official(messages, need_vision, mode, release_vram):
+        seen["official"] = messages[0]["content"]
+        return "official caption", "pup-gguf"
+    monkeypatch.setattr(upsampler.pup_gguf, "chat", official)
+    upsampler.upsample("an apple", backend="pup-gguf")
+    assert seen["official"] == "SYS-T2I"
+
+
+def test_llm_prompt_style_can_be_switched_back(monkeypatch):
+    monkeypatch.setenv("KLEIN_LLM_PROMPTS", "pup")
+    assert upsampler.llm_prompt_style() == "pup"
+    monkeypatch.setenv("KLEIN_LLM_PROMPTS", "external")
+    assert upsampler.llm_prompt_style() == "external"

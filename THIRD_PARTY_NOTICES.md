@@ -43,6 +43,9 @@ or the prompt upsampler model.
 
 - Source: [black-forest-labs/flux-3-image-klein-pup](https://huggingface.co/black-forest-labs/flux-3-image-klein-pup)
 - License: Apache License 2.0
+- For LLMs other than the official upsampler, the application downloads `src/flux3/pup_prompts_external_vlm.json`
+  from [black-forest-labs/flux-3-image-klein](https://github.com/black-forest-labs/flux-3-image-klein) (Apache License 2.0,
+  pinned commit) on first use.
 - By default the application downloads only `system_prompts.json` from this repository and
   sends those prompts to the configured LLM. The bf16 upsampler weights are not downloaded.
 

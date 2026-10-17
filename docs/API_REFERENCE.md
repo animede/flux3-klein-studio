@@ -104,7 +104,7 @@ FLUX 3 Image Klein Reference Studio の HTTP API の全エンドポイント、�
 ## `POST /api/enhance-prompt`
 
 短い依頼文を、FLUX 3 Image Klein が前提とする完全なシーンのキャプションに書き直します。
-BFL 公式のシステムプロンプト(`flux-3-image-klein-pup` の `system_prompts.json`)を LLM に渡します。
+外部の LLM(`auto`・`remote`・`local`)には、BFL が外部 LLM 向けに公開しているシステムプロンプト(公式推論コードの `pup_prompts_external_vlm.json`)を、公式 upsampler(`pup-*`)には公式 upsampler 用のシステムプロンプト(`flux-3-image-klein-pup` の `system_prompts.json`)を渡します。
 生成はしません。`/api/generate` は既定でこれと同じ展開をしてから生成するので、このエンドポイントは展開結果を生成前に確認・編集したいときに使います。
 確認したキャプションで生成するときは、`/api/generate` に `upsample=false` を付けて二重の展開を避けてください。
 
@@ -517,6 +517,8 @@ FastAPI 自身の型検証(必須フィールドの欠落、整数でない値�
 | `KLEIN_LOCAL_LLM_MODEL` | `~/models/gemma-4-E4B-it-Q4_K_M.gguf` | GGUF のモデル |
 | `KLEIN_LOCAL_LLM_MMPROJ` | 自動検出 | 画像入力用の mmproj |
 | `KLEIN_LOCAL_LLM_PORT` | `7865` | llama-server のポート(`127.0.0.1` のみ) |
+| `KLEIN_LOCAL_LLM_CTX` | `16384` | llama-server のコンテキスト長(外部 LLM 向けの T2I のシステムプロンプトは約 1 万トークン) |
+| `KLEIN_LLM_PROMPTS` | `external` | 外部の LLM に渡すシステムプロンプト。`external`(BFL の外部 LLM 向け)/ `pup`(公式 upsampler 用。2026-10-18 より前の動き) |
 | `KLEIN_LOCAL_LLM_GPU_MIN_FREE_GIB` | `8` | GPU で動かすのに必要な空き VRAM(GiB) |
 | `KLEIN_LOCAL_LLM_CPU_MIN_RAM_GIB` | `10` | CPU で動かすのに必要な空きメモリ(GiB) |
 | `KLEIN_LOCAL_LLM_CPU_MAX_LOAD` | `0.75` | CPU で動かす上限の負荷(1 分平均 ÷ コア数) |

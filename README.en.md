@@ -50,7 +50,7 @@ Base is not a "higher-quality version for everyday use"; it is the base model fo
 
 The official distilled INT8 ConvRot Transformer from the Comfy distribution is connected directly to the Diffusers ModularPipeline. The pipeline runs in stages: the ~5.43 GiB Transformer stays on the GPU, and the Qwen3-VL text encoder runs on the CPU. The default CUDA allocator limit is 8 GiB. ComfyUI is not used.
 
-The model card requires a prompt upsampler (short prompts give generic output, and a one-line edit instruction can change the whole composition). This app runs a local LLM with BFL's official system prompts (t2i / i2i / t2i_bbox / i2i_bbox) and the official input format. If you have GPU headroom, you can also use the official upsampler (quantized) (see "Using the official upsampler" below). **The prompt upsampler is on by default**: every generation first expands the input into a full caption.
+The model card requires a prompt upsampler (short prompts give generic output, and a one-line edit instruction can change the whole composition). This app runs a local LLM with the system prompts BFL publishes for external LLMs (`pup_prompts_external_vlm.json`, t2i / i2i / t2i_bbox / i2i_bbox). If you have GPU headroom, you can also use the official upsampler (quantized) (see "Using the official upsampler" below). **The prompt upsampler is on by default**: every generation first expands the input into a full caption.
 For comparison, you can generate without it (bypass): uncheck "prompt upsamplerを使う" (use the prompt upsampler) in the GUI, or send `upsample=false` to the API.
 To review the caption before generating, use the "prompt upsamplerで展開して確認" (expand and review) button in the GUI or `POST /api/enhance-prompt` (generating with the reviewed caption unchanged does not expand it again). For edits, the reference images are shown to the LLM as well.
 
@@ -64,7 +64,9 @@ Choose the LLM with "prompt upsamplerのLLM" (prompt upsampler LLM) in the GUI, 
      A GPU-oriented build (without `GGML_NATIVE`/`AVX2`) runs at only about 2 tokens/s on the CPU, so one expansion takes several minutes.
      Build the CPU version with `cmake -B build-cpu -DGGML_NATIVE=ON -DGGML_CUDA=OFF && cmake --build build-cpu --target llama-server`
      (about 10 tokens/s on an i5-12400F, 20–40 s per expansion)
-   - Related settings: `KLEIN_LOCAL_LLM_SERVER` (GPU build), `KLEIN_LOCAL_LLM_MODEL`, `KLEIN_LOCAL_LLM_MMPROJ`, `KLEIN_LOCAL_LLM_PORT` (default 7865); `KLEIN_LOCAL_LLM=0` disables it
+   - Related settings: `KLEIN_LOCAL_LLM_SERVER` (GPU build), `KLEIN_LOCAL_LLM_MODEL`, `KLEIN_LOCAL_LLM_MMPROJ`, `KLEIN_LOCAL_LLM_PORT` (default 7865), `KLEIN_LOCAL_LLM_CTX` (default 16384); `KLEIN_LOCAL_LLM=0` disables it
+
+External LLMs (LLM servers and the local gemma) get the system prompts BFL published for external LLMs on 2026-10-17 (fetched automatically on first use from a pinned commit of the official repository). The t2i prompt is about 10K tokens, so the LLM needs a context of 16K or more (LLM servers reuse the processed system prompt, so later requests are faster). To go back to the previous behaviour (the official upsampler's prompts for external LLMs too), set `KLEIN_LLM_PROMPTS=pup`. The official upsampler (`pup-*`) always gets its own prompts and format.
 
 | `upsampler` | LLM used |
 |---|---|
