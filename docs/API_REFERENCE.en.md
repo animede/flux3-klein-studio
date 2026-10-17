@@ -408,7 +408,7 @@ URLs are relative to the base URL. Files are not deleted automatically.
 | `reference_max_side` | integer \| null | Long-side limit for reference images |
 | `model` / `model_name` / `model_repo` | string | Model |
 | `base_revision` / `int8_revision` | string | Revisions of the model files used |
-| `transformer_quantization` / `text_quantization` | string | Quantization (`Official INT8 ConvRot` / `BF16 (CPU)`) |
+| `transformer_quantization` / `text_quantization` | string | Quantization (`Official INT8 ConvRot` / `BF16 (CPU memory, GPU sequential offload)`) |
 | Others | | All fields of [`metrics`](#metrics) |
 
 ---
@@ -467,6 +467,7 @@ URLs are relative to the base URL. Files are not deleted automatically.
 | `transformer_calls` | integer | Number of Transformer calls (equals `steps` for the distilled model without CFG) |
 | `guidance` | number \| null | CFG value (`null` for the distilled model) |
 | `shift` | number | Timestep shift (alpha) used |
+| `text_encoder` | string | Where the text encoder ran (`gpu-offload` / `cpu`) |
 
 ### Error shape
 
@@ -497,6 +498,7 @@ Read at server startup (also when started via `run.sh`).
 | `KLEIN_DEVICE` | `cuda:0` | GPU to use |
 | `KLEIN_MEMORY_BUDGET_GIB` | `8.0` | PyTorch GPU allocation limit (GiB) |
 | `KLEIN_TIMESTEP_SHIFT` | `16` | Default timestep shift (alpha). BFL changed it from 6.93 to 16 on 2026-10-17 |
+| `KLEIN_TEXT_ENCODER` | `gpu-offload` | Where the text encoder runs: `gpu-offload` (kept in CPU memory, computed on the GPU one layer at a time, ~2.5 s) / `cpu` (~30 s) |
 
 **Prompt upsampler (LLM servers)**
 

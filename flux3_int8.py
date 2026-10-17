@@ -22,8 +22,9 @@ that format without converting or dequantizing the weights.
 
 from __future__ import annotations
 
-import json
 import gc
+import json
+import os
 from pathlib import Path
 
 import torch
@@ -294,6 +295,15 @@ class Flux3ConvRotPipeline:
 
         self.text_pipe = blocks["text_encoder"].init_pipeline(self.model_dir)
         self.text_pipe.load_components(dtype=dtype, local_files_only=True)
+        # The 8 GB text encoder stays in CPU memory. By default it runs on the GPU one layer at a time
+        # (sequential offload): ~1 GiB of extra VRAM and ~2.5 s per prompt, against ~30 s on the CPU for
+        # the long captions the prompt upsampler writes. KLEIN_TEXT_ENCODER=cpu keeps it on the CPU.
+        self.text_encoder_mode = "cpu"
+        if str(device).startswith("cuda") and os.getenv("KLEIN_TEXT_ENCODER", "gpu-offload").strip().lower() != "cpu":
+            from accelerate import cpu_offload
+
+            cpu_offload(self.text_pipe.text_encoder, execution_device=torch.device(device))
+            self.text_encoder_mode = "gpu-offload"
 
         self.transformer = load_flux3_convrot_transformer(
             checkpoint, self.model_dir / "transformer", compute_dtype=dtype

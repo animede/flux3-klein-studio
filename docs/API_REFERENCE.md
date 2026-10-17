@@ -408,7 +408,7 @@ URL はベース URL からの相対パスです。ファイルは自動では�
 | `reference_max_side` | integer \| null | 参照画像の長辺の上限 |
 | `model` / `model_name` / `model_repo` | string | モデル |
 | `base_revision` / `int8_revision` | string | 使ったモデルファイルのリビジョン |
-| `transformer_quantization` / `text_quantization` | string | 量子化(`Official INT8 ConvRot` / `BF16 (CPU)`) |
+| `transformer_quantization` / `text_quantization` | string | 量子化(`Official INT8 ConvRot` / `BF16 (CPU memory, GPU sequential offload)`) |
 | その他 | | [`metrics`](#metrics) の全フィールド |
 
 ---
@@ -467,6 +467,7 @@ URL はベース URL からの相対パスです。ファイルは自動では�
 | `transformer_calls` | integer | Transformer の呼び出し回数(CFG なしの蒸留版では `steps` と同じ) |
 | `guidance` | number \| null | CFG の値(蒸留版は `null`) |
 | `shift` | number | 使ったタイムステップのシフト(alpha) |
+| `text_encoder` | string | テキストエンコーダーの計算場所(`gpu-offload` / `cpu`) |
 
 ### エラーの形
 
@@ -495,6 +496,7 @@ FastAPI 自身の型検証(必須フィールドの欠落、整数でない値�
 | `KLEIN_DEVICE` | `cuda:0` | 使う GPU |
 | `KLEIN_MEMORY_BUDGET_GIB` | `8.0` | PyTorch の GPU 割り当て上限(GiB) |
 | `KLEIN_TIMESTEP_SHIFT` | `16` | タイムステップのシフト(alpha)の既定値。BFL は 2026-10-17 に 6.93 から 16 に変更 |
+| `KLEIN_TEXT_ENCODER` | `gpu-offload` | テキストエンコーダーの計算場所。`gpu-offload`(CPU メモリに置き GPU で 1 層ずつ計算、約 2.5 秒)/ `cpu`(約 30 秒) |
 
 **prompt upsampler(LLM サーバ)**
 

@@ -29,7 +29,7 @@ API guide: [docs/API.en.md](docs/API.en.md), API reference: [docs/API_REFERENCE.
 
 | Value | Use | Image model | Text side | Default steps | License |
 |---|---|---|---|---:|---|
-| `flux3` | Latest-generation generation and editing | Official INT8 ConvRot distilled | Qwen3-VL-4B-Instruct (CPU, BF16) | 16 | FLUX Kommunity License v1.0 |
+| `flux3` | Latest-generation generation and editing | Official INT8 ConvRot distilled | Qwen3-VL-4B-Instruct (BF16, kept in CPU memory, computed on the GPU one layer at a time) | 16 | FLUX Kommunity License v1.0 |
 
 Downloading the model requires an explicit option confirming that you have reviewed the license.
 
@@ -48,7 +48,9 @@ Base is not a "higher-quality version for everyday use"; it is the base model fo
 
 ### Memory and prompts
 
-The official distilled INT8 ConvRot Transformer from the Comfy distribution is connected directly to the Diffusers ModularPipeline. The pipeline runs in stages: the ~5.43 GiB Transformer stays on the GPU, and the Qwen3-VL text encoder runs on the CPU. The default CUDA allocator limit is 8 GiB. ComfyUI is not used.
+The official distilled INT8 ConvRot Transformer from the Comfy distribution is connected directly to the Diffusers ModularPipeline. The pipeline runs in stages: the ~5.43 GiB Transformer stays on the GPU. The Qwen3-VL text encoder (~8 GB) stays in CPU memory and is computed on the GPU one layer at a time (sequential offload, about 1 GiB of extra VRAM): about 2.5 s per prompt even for the long captions of the upsampler, against about 30 s on the CPU (`KLEIN_TEXT_ENCODER=cpu` keeps it on the CPU). Above 1024 px (e.g. 2048 px) the VAE is tiled. The default CUDA allocator limit is 8 GiB. ComfyUI is not used.
+
+Measured (RTX PRO 4000 24GB, INT8, 16 steps, upsampler captions): text-to-image 1024×1024 about 12 s, one-reference edit 768×1024 about 18 s, two references about 30 s (all peaking at about 7.8 GiB). 2K (2048×2048) takes about 51 s with a peak of about 8.9 GiB (needs an allocator limit of 9 GiB or more).
 
 The model card requires a prompt upsampler (short prompts give generic output, and a one-line edit instruction can change the whole composition). This app runs a local LLM with the system prompts BFL publishes for external LLMs (`pup_prompts_external_vlm.json`, t2i / i2i / t2i_bbox / i2i_bbox). If you have GPU headroom, you can also use the official upsampler (quantized) (see "Using the official upsampler" below). **The prompt upsampler is on by default**: every generation first expands the input into a full caption.
 For comparison, you can generate without it (bypass): uncheck "prompt upsamplerを使う" (use the prompt upsampler) in the GUI, or send `upsample=false` to the API.

@@ -33,7 +33,7 @@ MODELS = {
         "outpaint_lora_revision": "d5c120af172d7c3018fdb1b02adf1194db23eca5",
         "outpaint_lora_file": "flux-3-image-klein-outpaint.safetensors",
         "quantization": "Official INT8 ConvRot",
-        "text_quantization": "BF16 (CPU)",
+        "text_quantization": "BF16 (CPU memory, GPU sequential offload)",
         "steps": 16,
         "guidance": None,
         # Timestep shift (alpha): BFL changed the default from 6.93 to 16 on 2026-10-17

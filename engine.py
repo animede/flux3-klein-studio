@@ -176,6 +176,7 @@ class Engine:
             "transformer_calls": metrics_calls,
             "guidance": config["guidance"],
             "shift": shift,
+            "text_encoder": getattr(self.pipe, "text_encoder_mode", "cpu"),
         }
 
     def unload(self):
