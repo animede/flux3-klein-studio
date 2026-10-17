@@ -62,7 +62,7 @@ def test_bad_inputs(client):
 
 
 def test_reference_and_result(client, monkeypatch):
-    def generate(model, prompt, ref, width, height, seed, progress, cancel):
+    def generate(model, prompt, ref, width, height, seed, progress, cancel, **kwargs):
         assert model == 'flux3'
         assert ref.mode == 'RGB' and ref.size == (768, 384)
         assert ref.getpixel((0, 0)) == (255, 255, 255)
@@ -78,7 +78,7 @@ def test_reference_and_result(client, monkeypatch):
 
 
 def test_eight_references_adaptive_size_and_limit(client, monkeypatch):
-    def generate(model, prompt, refs, width, height, seed, progress, cancel):
+    def generate(model, prompt, refs, width, height, seed, progress, cancel, **kwargs):
         assert model == 'flux3'
         assert isinstance(refs, list) and len(refs) == 8
         assert all(ref.mode == 'RGB' for ref in refs)
@@ -102,7 +102,7 @@ def test_eight_references_adaptive_size_and_limit(client, monkeypatch):
 
 
 def test_flux3_uses_its_step_count(client, monkeypatch):
-    def generate(model, prompt, refs, width, height, seed, progress, cancel):
+    def generate(model, prompt, refs, width, height, seed, progress, cancel, **kwargs):
         assert model == 'flux3'
         return Image.new('RGB', (width, height)), {'seconds': 1, 'steps': 16}
     monkeypatch.setattr(service.engine, 'generate', generate)
@@ -115,7 +115,7 @@ def test_flux3_uses_its_step_count(client, monkeypatch):
 
 
 def test_busy_cancel_and_recovery(client, monkeypatch):
-    def generate(model, prompt, ref, width, height, seed, progress, cancel):
+    def generate(model, prompt, ref, width, height, seed, progress, cancel, **kwargs):
         assert cancel.wait(3)
         raise Cancelled()
     monkeypatch.setattr(service.engine, 'generate', generate)
@@ -129,7 +129,7 @@ def test_busy_cancel_and_recovery(client, monkeypatch):
 
 
 def test_failure_releases_worker(client, monkeypatch):
-    def fail(*args):
+    def fail(*args, **kwargs):
         raise RuntimeError('CUDA out of memory')
     monkeypatch.setattr(service.engine, 'generate', fail)
     monkeypatch.setattr(service.engine, 'unload', lambda: None)
@@ -153,7 +153,7 @@ def test_health_lists_flux3(client):
 def test_boxes_accept_layout_and_edit_rows_in_model_card_format(client, monkeypatch):
     seen = {}
 
-    def generate(model, prompt, ref, width, height, seed, progress, cancel):
+    def generate(model, prompt, ref, width, height, seed, progress, cancel, **kwargs):
         seen['prompt'] = prompt
         return Image.new('RGB', (width, height)), {'seconds': 1}
     monkeypatch.setattr(service.engine, 'generate', generate)
@@ -177,7 +177,7 @@ def test_outpaint_needs_exactly_one_reference(client, monkeypatch):
 def test_upsample_falls_back_to_raw_prompt_with_warning(client, monkeypatch):
     seen = {}
 
-    def generate(model, prompt, ref, width, height, seed, progress, cancel):
+    def generate(model, prompt, ref, width, height, seed, progress, cancel, **kwargs):
         seen['prompt'] = prompt
         return Image.new('RGB', (width, height)), {'seconds': 1}
 
@@ -194,7 +194,7 @@ def test_upsample_falls_back_to_raw_prompt_with_warning(client, monkeypatch):
 def test_upsample_replaces_prompt_and_records_source(client, monkeypatch):
     seen = {}
 
-    def generate(model, prompt, ref, width, height, seed, progress, cancel):
+    def generate(model, prompt, ref, width, height, seed, progress, cancel, **kwargs):
         seen['prompt'] = prompt
         return Image.new('RGB', (width, height)), {'seconds': 1}
     monkeypatch.setattr(service.engine, 'generate', generate)
@@ -208,7 +208,7 @@ def test_upsample_replaces_prompt_and_records_source(client, monkeypatch):
 def test_upsample_false_bypasses_the_upsampler(client, monkeypatch):
     seen = {}
 
-    def generate(model, prompt, ref, width, height, seed, progress, cancel):
+    def generate(model, prompt, ref, width, height, seed, progress, cancel, **kwargs):
         seen['prompt'] = prompt
         return Image.new('RGB', (width, height)), {'seconds': 1}
     monkeypatch.setattr(service.engine, 'generate', generate)
@@ -240,7 +240,7 @@ def test_unknown_upsampler_is_rejected(client):
 def test_generate_passes_the_upsampler_choice(client, monkeypatch):
     seen = {}
 
-    def generate(model, prompt, ref, width, height, seed, progress, cancel):
+    def generate(model, prompt, ref, width, height, seed, progress, cancel, **kwargs):
         return Image.new('RGB', (width, height)), {'seconds': 1}
 
     def upsample(*args, **kwargs):
@@ -260,7 +260,7 @@ def test_health_lists_upsamplers(client):
 
 
 def test_gallery_lists_newest_first_and_deletes_files(client, monkeypatch):
-    def generate(model, prompt, ref, width, height, seed, progress, cancel):
+    def generate(model, prompt, ref, width, height, seed, progress, cancel, **kwargs):
         return Image.new('RGB', (width, height)), {'seconds': 1}
     monkeypatch.setattr(service.engine, 'generate', generate)
     first = wait_job(client, client.post('/api/generate', data={'prompt': 'one', 'upsample': 'false'},
@@ -288,3 +288,25 @@ def test_gallery_delete_rejects_bad_ids_and_running_jobs(client):
     service.jobs[job_id] = {'id': job_id, 'status': 'generating', 'cancel': threading.Event()}
     assert client.delete(f'/api/gallery/{job_id}').status_code == 409
     assert (service.OUTPUTS / f'{job_id}.png').exists()
+
+
+def test_shift_is_validated_and_passed_to_the_engine(client, monkeypatch):
+    seen = {}
+
+    def generate(model, prompt, ref, width, height, seed, progress, cancel, **kwargs):
+        seen.update(kwargs)
+        return Image.new('RGB', (width, height)), {'seconds': 1}
+    monkeypatch.setattr(service.engine, 'generate', generate)
+    assert client.post('/api/generate', data={'prompt': 'apple', 'shift': '0.5'}).status_code == 422
+    wait_job(client, client.post('/api/generate', data={'prompt': 'apple', 'upsample': 'false', 'shift': '6.93'}).json()['id'])
+    assert seen['shift'] == 6.93
+    wait_job(client, client.post('/api/generate', data={'prompt': 'apple', 'upsample': 'false'}).json()['id'])
+    assert seen['shift'] is None  # the engine falls back to KLEIN_TIMESTEP_SHIFT / the model default
+
+
+def test_default_shift_follows_bfl_and_the_env(monkeypatch):
+    import engine
+    monkeypatch.delenv('KLEIN_TIMESTEP_SHIFT', raising=False)
+    assert engine.default_shift('flux3') == 16.0
+    monkeypatch.setenv('KLEIN_TIMESTEP_SHIFT', '6.93')
+    assert engine.default_shift('flux3') == 6.93

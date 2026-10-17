@@ -203,6 +203,7 @@ curl -X POST http://127.0.0.1:7864/api/enhance-prompt \
 | `boxes` | string(JSON) | いいえ | `""` | 位置指定。[boxes の書式](#boxes-の書式) |
 | `upsample` | boolean | いいえ | `true` | prompt upsampler。生成の前に `/api/enhance-prompt` と同じ処理でプロンプトを展開する。`false` でバイパス(比較用、または展開済みのキャプションを送るとき) |
 | `upsample_strict` | boolean | いいえ | `false` | `true` なら、展開できないときにジョブを `error` にする。`false` なら元のプロンプトのまま生成し、`warning` を付ける |
+| `shift` | number | いいえ | `KLEIN_TIMESTEP_SHIFT`(既定 `16`) | タイムステップのシフト(alpha)。1〜50。BFL の推奨値は 16(2026-10-17 に 6.93 から変更) |
 | `upsampler` | string | いいえ | `KLEIN_UPSAMPLER`(既定 `auto`) | 展開に使う LLM。[LLM の選び方](#llm-の選び方)。公式版で VRAM が足りなければ、画像モデルを解放してから展開し、生成の前に読み込み直す |
 
 boolean は `true` / `false`(`1` / `0`、`yes` / `no`、`on` / `off` も可)で送ります。
@@ -465,6 +466,7 @@ URL はベース URL からの相対パスです。ファイルは自動では�
 | `steps` | integer | ステップ数 |
 | `transformer_calls` | integer | Transformer の呼び出し回数(CFG なしの蒸留版では `steps` と同じ) |
 | `guidance` | number \| null | CFG の値(蒸留版は `null`) |
+| `shift` | number | 使ったタイムステップのシフト(alpha) |
 
 ### エラーの形
 
@@ -492,6 +494,7 @@ FastAPI 自身の型検証(必須フィールドの欠落、整数でない値�
 | `KLEIN_PORT` | `7864` | ポート(`run.sh`) |
 | `KLEIN_DEVICE` | `cuda:0` | 使う GPU |
 | `KLEIN_MEMORY_BUDGET_GIB` | `8.0` | PyTorch の GPU 割り当て上限(GiB) |
+| `KLEIN_TIMESTEP_SHIFT` | `16` | タイムステップのシフト(alpha)の既定値。BFL は 2026-10-17 に 6.93 から 16 に変更 |
 
 **prompt upsampler(LLM サーバ)**
 

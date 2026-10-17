@@ -24,6 +24,14 @@ os.environ.setdefault("PYTORCH_ALLOC_CONF", "expandable_segments:True")
 from model_config import MODELS
 
 
+def default_shift(model_key):
+    """Timestep shift (alpha): KLEIN_TIMESTEP_SHIFT, else the model default (16, BFL's value since 2026-10-17)."""
+    try:
+        return float(os.getenv("KLEIN_TIMESTEP_SHIFT", MODELS[model_key]["shift"]))
+    except ValueError:
+        return float(MODELS[model_key]["shift"])
+
+
 class Cancelled(Exception):
     pass
 
@@ -90,7 +98,7 @@ class Engine:
             if outpaint and (config["int8_dir"] / config["outpaint_lora_file"]).is_file() else None,
         )
 
-    def generate(self, model_key, prompt, reference, width, height, seed, progress, cancel, outpaint=False):
+    def generate(self, model_key, prompt, reference, width, height, seed, progress, cancel, outpaint=False, shift=None):
         import torch
         started = time.monotonic()
         if torch.cuda.is_available():
@@ -102,6 +110,8 @@ class Engine:
         progress("encoding", 0, "プロンプトと参照画像を読み取っています")
 
         config = MODELS[model_key]
+        if shift is None:
+            shift = default_shift(model_key)
 
         generation_start = time.monotonic()
         with torch.inference_mode():
@@ -124,6 +134,7 @@ class Engine:
                 "generator": torch.Generator(device=self.device).manual_seed(seed),
                 "output": "images",
                 "output_type": "pil",
+                "shift": shift,
             }
             if padded_reference is not None:
                 kwargs["image"] = padded_reference
@@ -164,6 +175,7 @@ class Engine:
             "steps": config["steps"],
             "transformer_calls": metrics_calls,
             "guidance": config["guidance"],
+            "shift": shift,
         }
 
     def unload(self):

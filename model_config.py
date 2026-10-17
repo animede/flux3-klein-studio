@@ -36,6 +36,9 @@ MODELS = {
         "text_quantization": "BF16 (CPU)",
         "steps": 16,
         "guidance": None,
+        # Timestep shift (alpha): BFL changed the default from 6.93 to 16 on 2026-10-17
+        # (reference code black-forest-labs/flux-3-image-klein 62e90b92 and the ComfyUI workflows).
+        "shift": 16.0,
         "reference_pixel_budget": 8 * 768**2,
         "download_patterns": [
             "modular_model_index.json",

@@ -311,7 +311,7 @@ def release_vram_if_idle():
 
 
 def run_job(job_id, model_key, prompt, references, reference_side, width, height, seed, outpaint=False,
-            box_rows=None, upsample=False, upsample_strict=False, upsampler_backend=None):
+            box_rows=None, upsample=False, upsample_strict=False, upsampler_backend=None, shift=None):
     def progress(status, step, message):
         with jobs_lock:
             jobs[job_id].update(status=status, step=step, message=message)
@@ -349,10 +349,8 @@ def run_job(job_id, model_key, prompt, references, reference_side, width, height
             reference.save(path)
             reference_paths.append(f"uploads/{path.name}")
         model_input = references if len(references) > 1 else references[0] if references else None
-        if outpaint:
-            image, metrics = engine.generate(model_key, prompt, model_input, width, height, seed, progress, cancel, outpaint=True)
-        else:
-            image, metrics = engine.generate(model_key, prompt, model_input, width, height, seed, progress, cancel)
+        image, metrics = engine.generate(model_key, prompt, model_input, width, height, seed, progress, cancel,
+                                         outpaint=outpaint, shift=shift)
         if cancel.is_set():
             raise Cancelled()
         out = OUTPUTS / f"{job_id}.png"
@@ -492,6 +490,7 @@ async def generate(
     upsample: bool = Form(True, description="prompt upsampler(既定で有効、モデルカードが必須としている)。生成前にLLMでプロンプトを完全なキャプションへ展開する(/api/enhance-promptと同じ)。falseでバイパス(比較用、または作成済みのキャプションを送るとき)。"),
     upsample_strict: bool = Form(False, description="upsampleが使えないときに生成を止める(既定は元のプロンプトのまま生成し警告を付ける)。"),
     upsampler_backend: str | None = Form(None, alias="upsampler", description="auto / remote / local / pup-int8 / pup-gguf。省略時はKLEIN_UPSAMPLER(既定auto)。公式版(pup-*)はGPUを多く使い、足りなければ画像モデルを一時的に解放する。"),
+    shift: float | None = Form(None, description="タイムステップのシフト(alpha)。1〜50。省略時はKLEIN_TIMESTEP_SHIFT(既定16、BFLの推奨値。2026-10-17以前は6.93)。"),
 ):
     prompt = prompt.strip()
     if not prompt or len(prompt) > 4000:
@@ -514,6 +513,8 @@ async def generate(
         upsampler_backend = upsampler.resolve_backend(upsampler_backend)
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
+    if shift is not None and not (1.0 <= shift <= 50.0):
+        raise HTTPException(422, "shiftは1〜50で指定してください。")
     model = model.lower()
     if model not in MODELS:
         raise HTTPException(422, f"モデルは {' / '.join(MODELS)} から選択してください。")
@@ -563,7 +564,7 @@ async def generate(
         response = public_job(jobs[job_id])
     try:
         pool.submit(run_job, job_id, model, prompt, references, max_side, width, height, seed, outpaint,
-                    box_rows, bool(upsample), bool(upsample_strict), upsampler_backend)
+                    box_rows, bool(upsample), bool(upsample_strict), upsampler_backend, shift)
     except Exception:
         engine.lock.release()
         raise

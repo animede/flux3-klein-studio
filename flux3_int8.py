@@ -323,7 +323,12 @@ class Flux3ConvRotPipeline:
         image=None,
         output: str = "images",
         output_type: str = "pil",
+        shift: float | None = None,
     ):
+        if shift is not None:
+            # The constant timestep shift ("alpha"). Diffusers' FLUX.3 blocks default to 6.93; BFL's reference
+            # code and ComfyUI workflows use 16 since 2026-10-17.
+            self.denoise_pipe.scheduler.set_shift(float(shift))
         state = self.text_pipe(prompt=prompt)
         state = _move_state(state, self.device)
         if image is not None:

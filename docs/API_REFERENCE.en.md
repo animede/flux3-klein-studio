@@ -203,6 +203,7 @@ Creates an image generation job and returns `202` immediately. Generation runs i
 | `boxes` | string (JSON) | No | `""` | Placement. See [`boxes` format](#boxes-format) |
 | `upsample` | boolean | No | `true` | Prompt upsampler: expands the prompt before generation, using the same process as `/api/enhance-prompt`. `false` bypasses it (for comparison, or when sending an already-expanded caption) |
 | `upsample_strict` | boolean | No | `false` | If `true`, the job fails with `error` when expansion is not possible. If `false`, it generates with the original prompt and sets `warning` |
+| `shift` | number | No | `KLEIN_TIMESTEP_SHIFT` (default `16`) | Timestep shift (alpha), 1–50. BFL recommends 16 (changed from 6.93 on 2026-10-17) |
 | `upsampler` | string | No | `KLEIN_UPSAMPLER` (default `auto`) | LLM used for expansion. See [Choosing the LLM](#choosing-the-llm). If an official version lacks VRAM, the image model is released before expansion and reloaded before generation |
 
 Send booleans as `true` / `false` (`1` / `0`, `yes` / `no`, `on` / `off` are also accepted).
@@ -465,6 +466,7 @@ URLs are relative to the base URL. Files are not deleted automatically.
 | `steps` | integer | Number of steps |
 | `transformer_calls` | integer | Number of Transformer calls (equals `steps` for the distilled model without CFG) |
 | `guidance` | number \| null | CFG value (`null` for the distilled model) |
+| `shift` | number | Timestep shift (alpha) used |
 
 ### Error shape
 
@@ -494,6 +496,7 @@ Read at server startup (also when started via `run.sh`).
 | `KLEIN_PORT` | `7864` | Port (`run.sh`) |
 | `KLEIN_DEVICE` | `cuda:0` | GPU to use |
 | `KLEIN_MEMORY_BUDGET_GIB` | `8.0` | PyTorch GPU allocation limit (GiB) |
+| `KLEIN_TIMESTEP_SHIFT` | `16` | Default timestep shift (alpha). BFL changed it from 6.93 to 16 on 2026-10-17 |
 
 **Prompt upsampler (LLM servers)**
 
