@@ -164,8 +164,8 @@ The left side holds the inputs (reference images, request, prompt upsampler sett
 Because the left side stays visible, you can drag a result or gallery image onto the reference images on the left to use it as a reference for the next generation (or use the "参照に追加" (Add as reference) button).
 
 - Inputs: layout control (bounding boxes) is collapsed; expand it when needed.
-- Result: shown in the aspect ratio of the output size and kept on screen while scrolling. The image can be downloaded.
-- Gallery: shows previously generated images, newest first. Click an image to enlarge it (with its prompt, seed, and upsampler; use ←/→ to move between images), download it, add it as a reference, or delete it. Deleting also removes its settings JSON and reference images.
+- Result: shown in the aspect ratio of the output size and kept on screen while scrolling. Click it to enlarge (same view as the gallery); the image can be downloaded.
+- Gallery: shows previously generated images, newest first. Click an image to enlarge it (with its prompt, seed, and upsampler; use ←/→ to move between images; close with the ✕ at the top right, Esc, or a click on the backdrop), download it, add it as a reference, or delete it. Deleting also removes its settings JSON and reference images.
 
 By default the server listens only on `127.0.0.1`, so it can be opened only from a browser on the same machine.
 To use it from another machine, use SSH port forwarding (`ssh -L 7864:127.0.0.1:7864 <server>`) or start it with `KLEIN_HOST=0.0.0.0`.

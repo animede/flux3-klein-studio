@@ -73,7 +73,7 @@
         <button type="button" role="tab" id="tab-btn-gallery" class="tab" aria-selected="false" aria-controls="tab-gallery" tabindex="-1">ギャラリー <span id="gallery-tab-count" class="tab-count"></span></button>
       </div><span id="result-state" class="muted">READY</span></div>
       <div id="tab-result" role="tabpanel" aria-labelledby="tab-btn-result">
-      <div class="result-canvas" id="result-canvas"><div id="result-empty"><div class="canvas-symbol">✧</div><h3>ここから、新しい場面へ。</h3><p>生成した画像がここに表示されます。</p></div><img id="result-image" alt="生成された画像" draggable="true" title="左の参照画像へドラッグすると参照に追加できます" hidden></div>
+      <div class="result-canvas" id="result-canvas"><div id="result-empty"><div class="canvas-symbol">✧</div><h3>ここから、新しい場面へ。</h3><p>生成した画像がここに表示されます。</p></div><img id="result-image" alt="生成された画像" draggable="true" title="クリックで拡大。左の参照画像へドラッグすると参照に追加できます" hidden></div>
       <div id="result-actions" class="result-actions" hidden><a id="download" class="secondary" download="flux3-result.png">画像をダウンロード ↓</a><button type="button" id="reuse-seed" class="text-button">このシードを使う</button><button type="button" id="result-to-ref" class="text-button">参照に追加 ＋</button></div>
       <details id="details"><summary>生成情報</summary><div id="metrics">FLUX 3 Image Klein · 公式INT8 ConvRot · 16ステップ</div><a id="metadata" hidden>設定をJSONで保存</a></details>
       </div>
@@ -86,6 +86,7 @@
     </section>
   </div>
   <dialog id="lightbox" class="lightbox" aria-label="画像の拡大表示">
+    <button type="button" id="lightbox-x" class="lightbox-x" aria-label="閉じる" title="閉じる（Esc）">✕</button>
     <div class="lightbox-body">
       <img id="lightbox-image" alt="拡大した生成画像">
       <div class="lightbox-side">

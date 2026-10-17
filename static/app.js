@@ -143,6 +143,9 @@ async function poll(id) {
         $('result-image').hidden = false;
         $('result-empty').hidden = true;
         $('download').download = `flux3-${job.seed}-${job.id.slice(0, 8)}.png`;
+        currentResult = {id: job.id, image_url: job.image_url, metadata_url: job.metadata_url, created_at: job.created_at,
+          seed: job.seed, reference_count: job.reference_count, upsampler: job.upsample ? job.upsampler : null,
+          upsample_source: job.upsample_source, loaded: false};
         $('result-actions').hidden = false;
         $('download').href = job.image_url;
         $('metadata').href = job.metadata_url;
@@ -300,6 +303,7 @@ async function deleteGalleryItem(item) {
   try {
     await request(`/api/gallery/${item.id}`, { method: 'DELETE' });
   } catch (error) { showStatus(error.message, true); return false; }
+  if (currentResult && currentResult.id === item.id) currentResult = null;
   if ($('result-image').getAttribute('src') === item.image_url) {
     $('result-image').hidden = true; $('result-image').removeAttribute('src'); $('result-empty').hidden = false;
     $('result-actions').hidden = true; $('metadata').hidden = true; ratioFromSize();
@@ -310,10 +314,24 @@ async function deleteGalleryItem(item) {
   showStatus('画像を削除しました。');
   return true;
 }
+// The lightbox shows one item: a gallery entry (index >= 0, with prev/next) or the current result (index -1).
+let lightboxItem = null, currentResult = null;
 function openLightbox(index) {
-  const item = galleryItems[index];
-  if (!item) return;
-  lightboxIndex = index;
+  if (galleryItems[index]) showLightbox(galleryItems[index], index);
+}
+async function openResultLightbox() {
+  if (!currentResult) return;
+  if (!currentResult.loaded && currentResult.metadata_url) {
+    try {
+      const meta = await request(currentResult.metadata_url);
+      Object.assign(currentResult, {width: meta.width, height: meta.height, prompt: meta.prompt,
+        original_prompt: meta.original_prompt, upsampler: meta.upsampler, upsample_source: meta.upsample_source, loaded: true});
+    } catch {}
+  }
+  showLightbox(currentResult, -1);
+}
+function showLightbox(item, index) {
+  lightboxItem = item; lightboxIndex = index;
   $('lightbox-image').src = item.image_url;
   $('lightbox-download').href = item.image_url; $('lightbox-download').download = galleryFileName(item);
   $('lightbox-json').hidden = !item.metadata_url;
@@ -324,6 +342,7 @@ function openLightbox(index) {
   if (item.original_prompt) lines.push('', '依頼文：', item.original_prompt);
   if (item.prompt) lines.push('', 'プロンプト：', item.prompt);
   $('lightbox-meta').textContent = lines.join('\n');
+  $('lightbox-prev').hidden = $('lightbox-next').hidden = index < 0;
   $('lightbox-prev').disabled = index <= 0;
   $('lightbox-next').disabled = index >= galleryItems.length - 1 && galleryItems.length >= galleryTotal;
   if (!$('lightbox').open) $('lightbox').showModal();
@@ -336,15 +355,18 @@ async function stepLightbox(delta) {
 $('lightbox-prev').onclick = () => stepLightbox(-1);
 $('lightbox-next').onclick = () => stepLightbox(1);
 $('lightbox-close').onclick = () => $('lightbox').close();
+$('lightbox-x').onclick = () => $('lightbox').close();
+$('result-image').addEventListener('click', openResultLightbox);
 $('lightbox').addEventListener('click', event => { if (event.target === $('lightbox')) $('lightbox').close(); });
 $('lightbox').addEventListener('keydown', event => {
+  if (lightboxIndex < 0) return;
   if (event.key === 'ArrowLeft' && lightboxIndex > 0) stepLightbox(-1);
   if (event.key === 'ArrowRight') stepLightbox(1);
 });
 $('lightbox-delete').onclick = async () => {
-  const item = galleryItems[lightboxIndex];
+  const item = lightboxItem;
   if (!item || !(await deleteGalleryItem(item))) return;
-  if (!galleryItems.length) { $('lightbox').close(); return; }
+  if (lightboxIndex < 0 || !galleryItems.length) { $('lightbox').close(); return; }
   openLightbox(Math.min(lightboxIndex, galleryItems.length - 1));
 };
 // --- Right panel tabs: 生成結果 / ギャラリー (the form on the left stays, so images can be dragged into it) ---
@@ -420,7 +442,7 @@ $('result-to-ref').onclick = () => {
   if (src) addReferenceFromUrl(src, $('download').download);
 };
 $('lightbox-to-ref').onclick = () => {
-  const item = galleryItems[lightboxIndex];
+  const item = lightboxItem;
   if (item) { addReferenceFromUrl(item.image_url, galleryFileName(item)); $('lightbox').close(); }
 };
 
