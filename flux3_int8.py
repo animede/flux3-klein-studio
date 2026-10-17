@@ -270,9 +270,10 @@ def _move_state(state, device: str):
 class Flux3ConvRotPipeline:
     """Staged Diffusers pipeline for BFL's distilled ConvRot INT8 release.
 
-    Prompt encoding stays on CPU. The transformer and VAE execute on CUDA,
-    while explicit state transfers avoid loading the 9 GB text encoder into
-    the constrained GPU address space.
+    The transformer and VAE live on CUDA. The 8 GB text encoder stays in CPU
+    memory and runs on the GPU one layer at a time (sequential offload), so it
+    never has to fit next to the transformer in the 8 GiB budget; explicit
+    state transfers carry the tensors between the stages.
     """
 
     def __init__(

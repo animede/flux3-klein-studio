@@ -5,6 +5,7 @@
 FLUX 3 Image Klein Reference Studio (Diffusers server and GUI app) provides a job-based HTTP API for FLUX 3. The default base URL is `http://127.0.0.1:7864`.
 
 - Inputs, outputs, errors, and environment variables for every endpoint: [API Reference](API_REFERENCE.en.md)
+- Techniques used (INT8 loading, memory design, upsampler): [Technical Guide](TECHNICAL_GUIDE.en.md)
 - Swagger UI: `/docs`
 - ReDoc: `/redoc`
 - OpenAPI 3.1 JSON: `/openapi.json`
