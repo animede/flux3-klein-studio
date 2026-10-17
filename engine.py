@@ -91,7 +91,7 @@ class Engine:
 
         generation_start = time.monotonic()
         with torch.inference_mode():
-            progress("generating", 1, f"{config['steps']}ステップで生成中")
+            progress("generating", 0, f"{config['steps']}ステップで生成を開始します")
             padded_reference = reference
             original = None
             if outpaint and reference is not None and not isinstance(reference, list):
@@ -113,7 +113,25 @@ class Engine:
             }
             if padded_reference is not None:
                 kwargs["image"] = padded_reference
-            output = self.pipe(**kwargs)
+            # ステップごとの進捗と停止: パイプラインにステップのコールバックが無いため、
+            # Transformer の forward 呼び出し(蒸留版は CFG なしで 1 ステップ 1 回)を数える。
+            # 停止要求はここで Cancelled を投げて生成を打ち切る。
+            steps_total = config["steps"]
+            calls = {"n": 0}
+
+            def _on_transformer_call(_module, _args):
+                if cancel.is_set():
+                    raise Cancelled()
+                calls["n"] += 1
+                step = min(calls["n"], steps_total)
+                progress("generating", step, f"生成中 {step} / {steps_total}")
+
+            handle = self.pipe.transformer.register_forward_pre_hook(_on_transformer_call)
+            try:
+                output = self.pipe(**kwargs)
+            finally:
+                handle.remove()
+            metrics_calls = calls["n"]
             result = output[0] if isinstance(output, (list, tuple)) else output.images[0]
             if original is not None:
                 result.paste(resized, pad_xy)
@@ -130,6 +148,7 @@ class Engine:
             ),
             "gpu": torch.cuda.get_device_name(self.device),
             "steps": config["steps"],
+            "transformer_calls": metrics_calls,
             "guidance": config["guidance"],
         }
 

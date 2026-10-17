@@ -2,7 +2,6 @@ import io
 import json
 import logging
 import math
-import os
 import secrets
 import threading
 import time
@@ -17,6 +16,7 @@ from fastapi.staticfiles import StaticFiles
 from PIL import Image, ImageOps, UnidentifiedImageError
 from pydantic import BaseModel
 
+import upsampler
 from engine import Cancelled, Engine
 from model_config import DEFAULT_MODEL, MODELS, ROOT
 
@@ -29,12 +29,15 @@ MAX_UPLOAD = 10 * 1024 * 1024
 MAX_REFERENCES = 8
 REFERENCE_MAX_SIDE = 768
 
-LLM_BASE_URL = os.getenv("KLEIN_PROMPT_LLM_URL", "http://127.0.0.1:8080/v1")
-LLM_MODEL = os.getenv("KLEIN_PROMPT_LLM_MODEL", "bartowski/google_gemma-4-31B-it-GGUF:Q6_K_L")
 app = FastAPI(title="FLUX 3 Image Klein Reference Studio（評価版）", version="0.3.0", description="FLUX 3 Image Kleinでローカル画像生成・編集を行います。")
 app.mount("/outputs", StaticFiles(directory=OUTPUTS), name="outputs")
 app.mount("/static", StaticFiles(directory=ROOT / "static"), name="static")
 engine = Engine()
+
+
+@app.on_event("shutdown")
+def _stop_local_llm():
+    upsampler.shutdown()
 pool = ThreadPoolExecutor(max_workers=1)
 jobs = {}
 jobs_lock = threading.Lock()
@@ -81,6 +84,9 @@ class JobResponse(BaseModel):
     metrics: dict[str, Any] | None = None
     image_url: str | None = None
     metadata_url: str | None = None
+    upsample: bool = False
+    upsample_source: str | None = None
+    warning: str | None = None
 
 
 class UnloadResponse(BaseModel):
@@ -196,7 +202,8 @@ def decode_reference(data: bytes, max_side: int = REFERENCE_MAX_SIDE):
         raise ValueError("画像を読み込めません。PNG、JPEG、WebPなどの画像を選んでください。") from exc
 
 
-def run_job(job_id, model_key, prompt, references, reference_side, width, height, seed, outpaint=False):
+def run_job(job_id, model_key, prompt, references, reference_side, width, height, seed, outpaint=False,
+            box_rows=None, upsample=False, upsample_strict=False):
     def progress(status, step, message):
         with jobs_lock:
             jobs[job_id].update(status=status, step=step, message=message)
@@ -204,6 +211,27 @@ def run_job(job_id, model_key, prompt, references, reference_side, width, height
     try:
         with jobs_lock:
             cancel = jobs[job_id]["cancel"]
+        original_prompt = prompt
+        upsample_info = None
+        if upsample:
+            progress("upsampling", 0, "プロンプトをLLMで展開しています")
+            try:
+                upsample_info = upsampler.upsample(
+                    prompt, images=references, width=width, height=height,
+                    mode="i2i" if references else "t2i",
+                )
+                prompt = upsample_info["prompt"]
+                with jobs_lock:
+                    jobs[job_id]["upsample_source"] = upsample_info["source"]
+            except upsampler.UpsampleUnavailable as exc:
+                if upsample_strict:
+                    raise
+                with jobs_lock:
+                    jobs[job_id]["warning"] = f"プロンプト強化を使えなかったため、元のプロンプトで生成しました: {exc}"
+        if box_rows:
+            prompt = append_boxes(prompt, box_rows)
+        if cancel.is_set():
+            raise Cancelled()
         reference_paths = []
         for index, reference in enumerate(references, start=1):
             path = UPLOADS / f"{job_id}_ref_{index}.png"
@@ -220,6 +248,9 @@ def run_job(job_id, model_key, prompt, references, reference_side, width, height
         image.save(out)
         metadata = {
             "prompt": prompt, "seed": seed, "width": width, "height": height,
+            "original_prompt": original_prompt if prompt != original_prompt else None,
+            "upsample_source": upsample_info["source"] if upsample_info else None,
+            "boxes": box_rows,
             # Keep `reference` for clients built against the original single-image API.
             "reference": reference_paths[0] if reference_paths else None,
             "references": reference_paths,
@@ -253,29 +284,70 @@ def run_job(job_id, model_key, prompt, references, reference_side, width, height
         engine.lock.release()
 
 
-@app.post("/api/enhance-prompt")
-async def enhance_prompt(prompt: str = Form(...), mode: str = Form("t2i")):
-    """Expand a short request into the full scene caption expected by FLUX 3."""
-    import httpx
-    system = ("You are the FLUX 3 Image Klein prompt upsampler. Rewrite the user's request "
-              "as one complete visual scene caption. Include subject identity, composition, "
-              "position, scale, environment, lighting, camera viewpoint, lens, materials, "
-              "colors, texture, and depth of field. Preserve requested edits and references. "
-              "Output only the caption, without explanations or markdown.")
-    if mode == "i2i":
-        system += " For editing, describe the existing scene first and fold the requested change into it."
-    payload = {"model": LLM_MODEL, "messages": [{"role": "system", "content": system}, {"role": "user", "content": prompt.strip()}], "temperature": 0.2, "max_tokens": 1200, "stream": False}
+@app.post("/api/enhance-prompt", summary="短い依頼をFLUX 3用の完全なキャプションへ展開")
+async def enhance_prompt(
+    prompt: str = Form(..., description="短い依頼文。"),
+    mode: str = Form("auto", description="auto / t2i / i2i / t2i_bbox / i2i_bbox。autoは参照画像の有無で決める。"),
+    image: list[UploadFile] | None = File(None, description="編集(i2i)の参照画像。順番どおりLLMに見せる。"),
+    width: int | None = Form(None, description="T2Iの出力幅(キャンバスの縦横比を伝える)。"),
+    height: int | None = Form(None, description="T2Iの出力高さ。"),
+):
+    """公式システムプロンプトでLLMにキャプションを書かせる(upsampler.py 参照)。
+
+    リモートのLLMサーバ → ローカルのgemma-4-E4B(GPU/CPU)の順に試し、どれも使えなければ503。
+    """
+    from fastapi.concurrency import run_in_threadpool
+
+    images = []
+    for upload in [u for u in (image or []) if u.filename][:MAX_REFERENCES]:
+        data = await upload.read(MAX_UPLOAD + 1)
+        await upload.close()
+        if len(data) > MAX_UPLOAD:
+            raise HTTPException(413, "参照画像は1枚につき10MB以内にしてください。")
+        images.append(data)
     try:
-        async with httpx.AsyncClient(timeout=45) as client:
-            response = await client.post(f"{LLM_BASE_URL.rstrip('/')}/chat/completions", json=payload)
-            response.raise_for_status()
-            text = response.json()["choices"][0]["message"]["content"].strip()
-        if not text or len(text) > 8000:
-            raise ValueError("invalid completion")
-        return {"prompt": text, "model": LLM_MODEL}
-    except Exception as exc:
-        log.warning("Prompt enhancement failed: %s", exc)
-        raise HTTPException(502, "プロンプト強化LLMに接続できませんでした。") from exc
+        result = await run_in_threadpool(
+            upsampler.upsample, prompt, mode=mode, images=images, width=width, height=height,
+        )
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    except upsampler.UpsampleUnavailable as exc:
+        log.warning("Prompt enhancement unavailable: %s", exc)
+        raise HTTPException(503, str(exc)) from exc
+    return result
+
+
+def parse_boxes(raw: str) -> list:
+    """Layout rows: {"id", "bbox", "desc"}(T2I) or edit rows {"id", "from", "src_bbox", "tgt_bbox"(null=削除), "desc"}."""
+    def valid_box(box):
+        return (isinstance(box, list) and len(box) == 4
+                and all(isinstance(v, (int, float)) and 0 <= v <= 1000 for v in box)
+                and box[0] <= box[2] and box[1] <= box[3])
+
+    rows = json.loads(raw)
+    if not isinstance(rows, list) or not rows or len(rows) > 32:
+        raise ValueError("boxes must be a non-empty list of at most 32 rows")
+    for row in rows:
+        if not isinstance(row, dict) or not str(row.get("id") or "").strip():
+            raise ValueError("each row needs an id")
+        if "bbox" in row:
+            if not valid_box(row["bbox"]):
+                raise ValueError("bbox")
+        elif "src_bbox" in row or "tgt_bbox" in row:
+            if row.get("src_bbox") is not None and not valid_box(row["src_bbox"]):
+                raise ValueError("src_bbox")
+            if row.get("tgt_bbox") is not None and not valid_box(row["tgt_bbox"]):
+                raise ValueError("tgt_bbox")
+            if row.get("src_bbox") is None and row.get("tgt_bbox") is None:
+                raise ValueError("src_bbox or tgt_bbox")
+        else:
+            raise ValueError("bbox / src_bbox / tgt_bbox")
+    return rows
+
+
+def append_boxes(prompt: str, rows: list) -> str:
+    """モデルカードの書式: キャプションの後に空白1つ、そのあとにJSON配列(要素はキャプション中で <id> を引用)。"""
+    return f"{prompt.rstrip()} {json.dumps(rows, ensure_ascii=False)}"
 
 
 @app.post(
@@ -293,24 +365,24 @@ async def generate(
     height: int = Form(768, description="出力高さ。256〜1024の32の倍数。"),
     seed: int = Form(-1, description="-1でランダム、または0〜4294967295。"),
     model: str = Form(DEFAULT_MODEL, description="flux3。"),
-    outpaint: bool = Form(False, description="FLUX 3のアウトペイントLoRAを使用"),
-    boxes: str = Form("", description="任意のバウンディングボックスJSON"),
+    outpaint: bool = Form(False, description="FLUX 3のアウトペイントLoRAを使用(参照画像1枚のときのみ)"),
+    boxes: str = Form("", description="任意のバウンディングボックスJSON。T2Iは{id,bbox,desc}、編集は{id,from,src_bbox,tgt_bbox,desc}(tgt_bbox=nullで削除)。"),
+    upsample: bool = Form(False, description="生成前にLLMでプロンプトを完全なキャプションへ展開する(/api/enhance-promptと同じ)。"),
+    upsample_strict: bool = Form(False, description="upsampleが使えないときに生成を止める(既定は元のプロンプトのまま生成し警告を付ける)。"),
 ):
     prompt = prompt.strip()
     if not prompt or len(prompt) > 4000:
         raise HTTPException(422, "プロンプトは1〜4000文字で入力してください。")
+    box_rows = None
     if boxes.strip():
         try:
-            parsed_boxes = json.loads(boxes)
-            if not isinstance(parsed_boxes, list) or len(parsed_boxes) > 32:
-                raise ValueError
-            for item in parsed_boxes:
-                bbox = item["bbox"]
-                if len(bbox) != 4 or any(not isinstance(v, (int, float)) or v < 0 or v > 1000 for v in bbox):
-                    raise ValueError
-            prompt = f"{prompt}\n\nLayout boxes (0-1000 grid):\n{json.dumps(parsed_boxes, ensure_ascii=False)}"
-        except (ValueError, KeyError, TypeError, json.JSONDecodeError) as exc:
-            raise HTTPException(422, "boxesはbboxを含むJSON配列で指定してください。") from exc
+            box_rows = parse_boxes(boxes)
+        except (ValueError, TypeError, json.JSONDecodeError) as exc:
+            raise HTTPException(
+                422,
+                "boxesはJSON配列で指定してください。各要素は id と、bbox(配置)または "
+                "src_bbox / tgt_bbox(編集、tgt_bbox=nullで削除)を持ち、座標は0〜1000の[top, left, bottom, right]です。",
+            ) from exc
     if any(n < 256 or n > 1024 or n % 32 for n in (width, height)):
         raise HTTPException(422, "幅・高さは256〜1024の32の倍数で指定してください。")
     if seed < -1 or seed > 2**32 - 1:
@@ -325,6 +397,10 @@ async def generate(
     if not model_available(MODELS[model]):
         raise HTTPException(409, f"{MODELS[model]['name']}は未取得です。download_models.py {model} を実行してください。")
     uploads = [upload for upload in (image or []) if upload.filename]
+    if outpaint and len(uploads) != 1:
+        for upload in uploads:
+            await upload.close()
+        raise HTTPException(422, "アウトペイントは参照画像1枚で指定してください。")
     if len(uploads) > MAX_REFERENCES:
         for upload in uploads:
             await upload.close()
@@ -354,10 +430,12 @@ async def generate(
                         "seed": seed, "message": "生成を準備しています", "created_at": time.time(),
                         "reference_count": len(references),
                         "reference_max_side": max_side if references else None,
+                        "upsample": bool(upsample), "upsample_source": None, "warning": None,
                         "cancel": threading.Event()}
         response = public_job(jobs[job_id])
     try:
-        pool.submit(run_job, job_id, model, prompt, references, max_side, width, height, seed, outpaint)
+        pool.submit(run_job, job_id, model, prompt, references, max_side, width, height, seed, outpaint,
+                    box_rows, bool(upsample), bool(upsample_strict))
     except Exception:
         engine.lock.release()
         raise

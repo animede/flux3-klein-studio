@@ -42,6 +42,7 @@
       <div class="prompt-actions"><button type="button" id="example-prompt" class="text-button example">＋ キャラクター保持の例文を入れる</button>
       <button type="button" id="expand-prompt" class="text-button example">＋ 詳細なscene captionに展開</button>
       <button type="button" id="llm-prompt" class="text-button example">✦ LLMで公式形式に強化</button></div>
+      <label><input id="auto-upsample" name="upsample" type="checkbox"> 生成時にLLMで自動的に強化する（使えないときは元の文で生成）</label>
       <label class="boxes-label">レイアウト指定（任意・0〜1000座標のJSON）<textarea id="boxes" rows="3" placeholder='[{"id":"subject_1","bbox":[150,150,850,850],"desc":"主役の被写体"}]'></textarea></label>
       <div class="box-editor"><div class="box-editor-title">画像上でドラッグして配置範囲を指定</div><canvas id="box-canvas" width="640" height="360"></canvas><button type="button" id="clear-boxes" class="text-button">矩形をクリア</button></div>
       <div class="settings"><label>出力サイズ<select id="size"><option value="768,768">768 × 768 · 正方形</option><option value="512,512">512 × 512 · 軽量</option><option value="768,1024">768 × 1024 · 縦長</option><option value="1024,768">1024 × 768 · 横長</option><option value="1024,1024">1024 × 1024 · 高解像度</option></select></label><label>シード<input id="seed" name="seed" type="number" min="-1" max="4294967295" value="-1"><small>−1で毎回ランダム</small></label></div>

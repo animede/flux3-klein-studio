@@ -43,7 +43,19 @@ Baseは「より高品質な通常利用版」ではなく、追加学習用の�
 
 FLUX 3は、公式Comfy配布のdistilled INT8 ConvRot TransformerをDiffusers ModularPipelineへ直接接続します。約5.43GiBのTransformerをGPUに置き、Qwen3-VLテキストエンコーダーはCPUで実行する段階式Pipelineです。既定のCUDA allocator上限は8GiBで、ComfyUIは使用しません。
 
-公式は短い入力を詳細なscene captionへ展開するprompt upsamplerの利用を強く推奨しています。このアプリは大きな追加モデルであるupsamplerを自動取得・実行しないため、FLUX 3では構図、被写体、背景、照明、質感まで含む詳しいプロンプトを入力してください。
+公式はprompt upsamplerの使用を必須としています(短い入力は平凡な出力になり、1行の編集指示は構図まで変えてしまう)。このアプリは18.8GBの公式upsamplerの代わりに、BFL公式のシステムプロンプト(t2i / i2i / t2i_bbox / i2i_bbox)でLLMを動かします。画面の「LLMで公式形式に強化」、生成時の自動強化(`upsample=true`)、`POST /api/enhance-prompt`で使えます。編集では参照画像もLLMに見せます。
+
+LLMは次の順に試します。どれも使えなければ理由を表示します(自動強化では元の文のまま生成し警告を出す)。
+
+1. LLMサーバ: `KLEIN_PROMPT_LLM_URLS`(OpenAI互換のURLをカンマ区切りで、書いた順に試す。例: `http://127.0.0.1:8080/v1`。未設定ならLLMサーバは使わない)
+2. ローカルのgemma-4-E4B(llama.cpp の llama-server、画像入力用のmmproj付き)
+   - 空きVRAMが`KLEIN_LOCAL_LLM_GPU_MIN_FREE_GIB`(既定8)以上ならGPUで動かし、使い終わったらすぐ停止
+   - そうでなければ、空きメモリが`KLEIN_LOCAL_LLM_CPU_MIN_RAM_GIB`(既定10)以上でCPUに余裕があるときCPUで動かす
+   - CPUではCPU向けにビルドしたllama-server(`KLEIN_LOCAL_LLM_SERVER_CPU`、既定`~/llama.cpp/build-cpu/bin/llama-server`)を使う。
+     GPU向けビルド(`GGML_NATIVE`/`AVX2`なし)をCPUで動かすと毎秒2トークン程度しか出ず、1回の強化に数分かかる。
+     CPU向けは`cmake -B build-cpu -DGGML_NATIVE=ON -DGGML_CUDA=OFF && cmake --build build-cpu --target llama-server`で作れる
+     (i5-12400Fで生成毎秒10トークン、1回20〜40秒)
+   - 関連する設定: `KLEIN_LOCAL_LLM_SERVER`(GPU用)、`KLEIN_LOCAL_LLM_MODEL`、`KLEIN_LOCAL_LLM_MMPROJ`、`KLEIN_LOCAL_LLM_PORT`(既定7865)、`KLEIN_LOCAL_LLM=0`で無効
 
 CUDA 13対応環境と`comfy-kitchen`のConvRotカーネルが必要です。
 
@@ -61,7 +73,7 @@ Python 3.12、NVIDIA CUDA対応GPU、十分なRAMと空きディスクが必要�
 
 依存ライブラリだけ準備する場合は`./setup.sh none`を使います。
 
-取得後の画像生成はローカルファイルだけで動作します。「LLMで公式形式に強化」を使った場合のみ、プロンプトが`KLEIN_PROMPT_LLM_URL`の設定先へ送信されます。
+取得後の画像生成はローカルファイルだけで動作します。プロンプト強化を使った場合のみ、プロンプトと(編集時は)参照画像が`KLEIN_PROMPT_LLM_URLS`の設定先へ送信されます。ローカルLLMにフォールバックした場合は外部へ送信しません。
 
 ## API
 

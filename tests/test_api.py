@@ -129,3 +129,63 @@ def test_health_lists_flux3(client):
     assert models['default'] == 'flux3'
     assert models['models']['flux3']['quantization'] == 'Official INT8 ConvRot'
     assert models['models']['flux3']['available']
+
+
+def test_boxes_accept_layout_and_edit_rows_in_model_card_format(client, monkeypatch):
+    seen = {}
+
+    def generate(model, prompt, ref, width, height, seed, progress, cancel):
+        seen['prompt'] = prompt
+        return Image.new('RGB', (width, height)), {'seconds': 1}
+    monkeypatch.setattr(service.engine, 'generate', generate)
+    edit_rows = '[{"id":"bag_1","from":"<ref_image_0>","src_bbox":[500,100,800,300],"tgt_bbox":null,"desc":"a handbag"}]'
+    r = client.post('/api/generate', data={'prompt': 'Remove the bag <bag_1>.', 'boxes': edit_rows}, files={'image': ('ref.png', png_bytes())})
+    assert r.status_code == 202
+    assert wait_job(client, r.json()['id'])['status'] == 'done'
+    assert seen['prompt'].startswith('Remove the bag <bag_1>. [{"id": "bag_1"')
+    assert 'Layout boxes' not in seen['prompt']
+    for bad in ('{}', '[{"id":"x"}]', '[{"id":"x","bbox":[0,0,1200,10]}]', '[{"id":"x","src_bbox":null,"tgt_bbox":null}]'):
+        assert client.post('/api/generate', data={'prompt': 'hi', 'boxes': bad}).status_code == 422
+
+
+def test_outpaint_needs_exactly_one_reference(client, monkeypatch):
+    monkeypatch.setattr(service.MODELS['flux3']['int8_dir'].__class__, 'is_file', lambda self: True, raising=False)
+    two = [('image', ('a.png', png_bytes())), ('image', ('b.png', png_bytes()))]
+    assert client.post('/api/generate', data={'prompt': 'extend', 'outpaint': 'true'}, files=two).status_code == 422
+    assert client.post('/api/generate', data={'prompt': 'extend', 'outpaint': 'true'}).status_code == 422
+
+
+def test_upsample_falls_back_to_raw_prompt_with_warning(client, monkeypatch):
+    seen = {}
+
+    def generate(model, prompt, ref, width, height, seed, progress, cancel):
+        seen['prompt'] = prompt
+        return Image.new('RGB', (width, height)), {'seconds': 1}
+
+    def unavailable(*args, **kwargs):
+        raise service.upsampler.UpsampleUnavailable('no llm')
+    monkeypatch.setattr(service.engine, 'generate', generate)
+    monkeypatch.setattr(service.upsampler, 'upsample', unavailable)
+    state = wait_job(client, client.post('/api/generate', data={'prompt': 'an apple', 'upsample': 'true'}).json()['id'])
+    assert state['status'] == 'done' and 'no llm' in state['warning'] and seen['prompt'] == 'an apple'
+    strict = wait_job(client, client.post('/api/generate', data={'prompt': 'an apple', 'upsample': 'true', 'upsample_strict': 'true'}).json()['id'])
+    assert strict['status'] == 'error'
+
+
+def test_upsample_replaces_prompt_and_records_source(client, monkeypatch):
+    seen = {}
+
+    def generate(model, prompt, ref, width, height, seed, progress, cancel):
+        seen['prompt'] = prompt
+        return Image.new('RGB', (width, height)), {'seconds': 1}
+    monkeypatch.setattr(service.engine, 'generate', generate)
+    monkeypatch.setattr(service.upsampler, 'upsample', lambda *a, **k: {'prompt': 'FULL CAPTION', 'source': 'remote:x', 'model': 'm', 'mode': 't2i', 'cached': False})
+    state = wait_job(client, client.post('/api/generate', data={'prompt': 'an apple', 'upsample': 'true'}).json()['id'])
+    assert state['status'] == 'done' and state['upsample_source'] == 'remote:x' and seen['prompt'] == 'FULL CAPTION'
+
+
+def test_enhance_prompt_maps_unavailable_to_503(client, monkeypatch):
+    def unavailable(*args, **kwargs):
+        raise service.upsampler.UpsampleUnavailable('no llm')
+    monkeypatch.setattr(service.upsampler, 'upsample', unavailable)
+    assert client.post('/api/enhance-prompt', data={'prompt': 'apple'}).status_code == 503

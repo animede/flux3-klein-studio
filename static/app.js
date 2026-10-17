@@ -104,7 +104,7 @@ async function poll(id) {
         showStatus('接続を再確認しています…');
         await new Promise(r => setTimeout(r, 2000)); continue;
       }
-      showStatus(job.message, job.status === 'error');
+      showStatus(job.warning ? `${job.message}（${job.warning}）` : job.message, job.status === 'error' || !!job.warning);
       $('result-state').textContent = job.status.toUpperCase();
       $('progress-fill').style.width = `${job.step / job.steps * 100}%`;
       if (job.status === 'done') {
@@ -119,7 +119,8 @@ async function poll(id) {
         lastSeed = job.seed;
         const m = job.metrics;
         const quant = '公式INT8 ConvRot · FLUX Kommunity License v1.0';
-        $('metrics').textContent = `モデル：${job.model_name}\nシード：${job.seed}\n生成時間：${m.seconds}秒（読み込み込み ${m.total_seconds}秒）\nピークVRAM：割り当て ${m.peak_allocated_gib} GiB / 予約 ${m.peak_reserved_gib} GiB\nGPU：${m.gpu}\nPyTorch割り当て上限：${m.allocator_budget_gib} GiB\n${m.steps}ステップ · ${quant}\n※VRAM値はPyTorch計測。ドライバー等の使用量は含みません。`;
+        const upsampled = job.upsample_source ? `プロンプト強化：${job.upsample_source}\n` : '';
+        $('metrics').textContent = `モデル：${job.model_name}\nシード：${job.seed}\n${upsampled}生成時間：${m.seconds}秒（読み込み込み ${m.total_seconds}秒）\nピークVRAM：割り当て ${m.peak_allocated_gib} GiB / 予約 ${m.peak_reserved_gib} GiB\nGPU：${m.gpu}\nPyTorch割り当て上限：${m.allocator_budget_gib} GiB\n${m.steps}ステップ · ${quant}\n※VRAM値はPyTorch計測。ドライバー等の使用量は含みません。`;
       }
       if (['done', 'error', 'cancelled'].includes(job.status)) {
         activeJob = null; localStorage.removeItem('klein-job'); busy(false); break;
@@ -141,6 +142,7 @@ $('generate-form').addEventListener('submit', async event => {
   data.set('seed', $('seed').value);
   data.set('outpaint', $('outpaint').checked ? 'true' : 'false');
   data.set('boxes', $('boxes').value);
+  data.set('upsample', $('auto-upsample').checked ? 'true' : 'false');
   for (const file of $('image-input').files) data.append('image', file);
   try {
     const job = await request('/api/generate', { method: 'POST', body: data });
@@ -159,9 +161,13 @@ $('llm-prompt').onclick = async () => {
   if (!field.value.trim()) return;
   const button = $('llm-prompt'); button.disabled = true; button.textContent = 'LLMで強化中…';
   try {
-    const data = new FormData(); data.set('prompt', field.value); data.set('mode', $('image-input').files.length ? 'i2i' : 't2i');
+    // 編集(参照画像あり)では画像も LLM に見せる(公式 i2i 形式は参照画像の記述に編集内容を織り込むため)。
+    const data = new FormData(); data.set('prompt', field.value); data.set('mode', 'auto');
+    const [w, h] = $('size').value.split(','); data.set('width', w); data.set('height', h);
+    for (const file of $('image-input').files) data.append('image', file);
     const result = await request('/api/enhance-prompt', {method: 'POST', body: data});
     field.value = result.prompt;
+    showStatus(`プロンプトを強化しました（${result.source}${result.cached ? '・キャッシュ' : ''}）`);
   } catch (error) { showStatus(error.message, true); }
   finally { button.disabled = false; button.textContent = '✦ LLMで公式形式に強化'; }
 };
