@@ -1,5 +1,22 @@
+/*
+ * Copyright 2026 YUZUKI
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
 const $ = id => document.getElementById(id);
 let activeJob = null, lastSeed = null, referenceURLs = [], polling = false;
+// Caption produced by the "展開して確認" button; sending it unchanged skips a second upsampling pass.
+let lastUpsampled = null, upsamplerNote = '';
 
 function showStatus(message, error = false) {
   $('status').textContent = message;
@@ -119,7 +136,7 @@ async function poll(id) {
         lastSeed = job.seed;
         const m = job.metrics;
         const quant = '公式INT8 ConvRot · FLUX Kommunity License v1.0';
-        const upsampled = job.upsample_source ? `プロンプト強化：${job.upsample_source}\n` : '';
+        const upsampled = `prompt upsampler：${job.upsample_source || (job.upsample ? '使えず元の文で生成' : (upsamplerNote || 'バイパス'))}\n`;
         $('metrics').textContent = `モデル：${job.model_name}\nシード：${job.seed}\n${upsampled}生成時間：${m.seconds}秒（読み込み込み ${m.total_seconds}秒）\nピークVRAM：割り当て ${m.peak_allocated_gib} GiB / 予約 ${m.peak_reserved_gib} GiB\nGPU：${m.gpu}\nPyTorch割り当て上限：${m.allocator_budget_gib} GiB\n${m.steps}ステップ · ${quant}\n※VRAM値はPyTorch計測。ドライバー等の使用量は含みません。`;
       }
       if (['done', 'error', 'cancelled'].includes(job.status)) {
@@ -142,7 +159,9 @@ $('generate-form').addEventListener('submit', async event => {
   data.set('seed', $('seed').value);
   data.set('outpaint', $('outpaint').checked ? 'true' : 'false');
   data.set('boxes', $('boxes').value);
-  data.set('upsample', $('auto-upsample').checked ? 'true' : 'false');
+  const preExpanded = $('auto-upsample').checked && lastUpsampled !== null && $('prompt').value === lastUpsampled;
+  upsamplerNote = preExpanded ? '展開済みのキャプションを使用' : 'バイパス（入力文をそのまま使用）';
+  data.set('upsample', $('auto-upsample').checked && !preExpanded ? 'true' : 'false');
   for (const file of $('image-input').files) data.append('image', file);
   try {
     const job = await request('/api/generate', { method: 'POST', body: data });
@@ -159,17 +178,17 @@ $('expand-prompt').onclick = () => {
 $('llm-prompt').onclick = async () => {
   const field = $('prompt');
   if (!field.value.trim()) return;
-  const button = $('llm-prompt'); button.disabled = true; button.textContent = 'LLMで強化中…';
+  const button = $('llm-prompt'); button.disabled = true; button.textContent = 'prompt upsamplerで展開中…';
   try {
     // 編集(参照画像あり)では画像も LLM に見せる(公式 i2i 形式は参照画像の記述に編集内容を織り込むため)。
     const data = new FormData(); data.set('prompt', field.value); data.set('mode', 'auto');
     const [w, h] = $('size').value.split(','); data.set('width', w); data.set('height', h);
     for (const file of $('image-input').files) data.append('image', file);
     const result = await request('/api/enhance-prompt', {method: 'POST', body: data});
-    field.value = result.prompt;
-    showStatus(`プロンプトを強化しました（${result.source}${result.cached ? '・キャッシュ' : ''}）`);
+    field.value = result.prompt; lastUpsampled = result.prompt;
+    showStatus(`prompt upsamplerで展開しました（${result.source}${result.cached ? '・キャッシュ' : ''}）。このまま生成すると、もう一度は展開しません`);
   } catch (error) { showStatus(error.message, true); }
-  finally { button.disabled = false; button.textContent = '✦ LLMで公式形式に強化'; }
+  finally { button.disabled = false; button.textContent = '✦ prompt upsamplerで展開して確認'; }
 };
 const boxCanvas = $('box-canvas');
 const boxCtx = boxCanvas.getContext('2d');

@@ -1,3 +1,17 @@
+# Copyright 2026 YUZUKI
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 import io
 import json
 import logging
@@ -29,7 +43,7 @@ MAX_UPLOAD = 10 * 1024 * 1024
 MAX_REFERENCES = 8
 REFERENCE_MAX_SIDE = 768
 
-app = FastAPI(title="FLUX 3 Image Klein Reference Studio（評価版）", version="0.3.0", description="FLUX 3 Image Kleinでローカル画像生成・編集を行います。")
+app = FastAPI(title="FLUX 3 Image Klein Reference Studio（DiffusersサーバとGUIアプリ）", version="0.3.0", description="FLUX 3 Image KleinをDiffusersで動かし、8GBのVRAMに収めた画像生成・編集サーバーです。")
 app.mount("/outputs", StaticFiles(directory=OUTPUTS), name="outputs")
 app.mount("/static", StaticFiles(directory=ROOT / "static"), name="static")
 engine = Engine()
@@ -84,7 +98,7 @@ class JobResponse(BaseModel):
     metrics: dict[str, Any] | None = None
     image_url: str | None = None
     metadata_url: str | None = None
-    upsample: bool = False
+    upsample: bool = True
     upsample_source: str | None = None
     warning: str | None = None
 
@@ -227,7 +241,7 @@ def run_job(job_id, model_key, prompt, references, reference_side, width, height
                 if upsample_strict:
                     raise
                 with jobs_lock:
-                    jobs[job_id]["warning"] = f"プロンプト強化を使えなかったため、元のプロンプトで生成しました: {exc}"
+                    jobs[job_id]["warning"] = f"prompt upsamplerを使えなかったため、元のプロンプトで生成しました: {exc}"
         if box_rows:
             prompt = append_boxes(prompt, box_rows)
         if cancel.is_set():
@@ -304,7 +318,11 @@ async def enhance_prompt(
         await upload.close()
         if len(data) > MAX_UPLOAD:
             raise HTTPException(413, "参照画像は1枚につき10MB以内にしてください。")
-        images.append(data)
+        try:
+            # Decode here so a non-image upload is a 422, not an error inside the LLM call.
+            images.append(decode_reference(data, max_side=1024))
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
     try:
         result = await run_in_threadpool(
             upsampler.upsample, prompt, mode=mode, images=images, width=width, height=height,
@@ -312,7 +330,7 @@ async def enhance_prompt(
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
     except upsampler.UpsampleUnavailable as exc:
-        log.warning("Prompt enhancement unavailable: %s", exc)
+        log.warning("Prompt upsampler unavailable: %s", exc)
         raise HTTPException(503, str(exc)) from exc
     return result
 
@@ -367,7 +385,7 @@ async def generate(
     model: str = Form(DEFAULT_MODEL, description="flux3。"),
     outpaint: bool = Form(False, description="FLUX 3のアウトペイントLoRAを使用(参照画像1枚のときのみ)"),
     boxes: str = Form("", description="任意のバウンディングボックスJSON。T2Iは{id,bbox,desc}、編集は{id,from,src_bbox,tgt_bbox,desc}(tgt_bbox=nullで削除)。"),
-    upsample: bool = Form(False, description="生成前にLLMでプロンプトを完全なキャプションへ展開する(/api/enhance-promptと同じ)。"),
+    upsample: bool = Form(True, description="prompt upsampler(既定で有効、モデルカードが必須としている)。生成前にLLMでプロンプトを完全なキャプションへ展開する(/api/enhance-promptと同じ)。falseでバイパス(比較用、または作成済みのキャプションを送るとき)。"),
     upsample_strict: bool = Form(False, description="upsampleが使えないときに生成を止める(既定は元のプロンプトのまま生成し警告を付ける)。"),
 ):
     prompt = prompt.strip()

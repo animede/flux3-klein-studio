@@ -1,3 +1,17 @@
+# Copyright 2026 YUZUKI
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Load the official Comfy-format FLUX 3 ConvRot INT8 DiT into Diffusers.
 
 Black Forest Labs publishes the 8 GB INT8 checkpoint as a single ComfyUI

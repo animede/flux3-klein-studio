@@ -1,3 +1,17 @@
+# Copyright 2026 YUZUKI
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 """Prompt upsampler for FLUX 3 Image Klein.
 
 The model card requires a prompt upsampler: the model takes full scene captions, and
@@ -420,7 +434,7 @@ def upsample(request: str, *, mode: str = "auto", images=(), width: int | None =
         except Exception as exc:  # noqa: BLE001
             reasons.append(f"ローカル LLM: {type(exc).__name__}: {exc}")
     if result is None:
-        raise UpsampleUnavailable("プロンプト強化に使える LLM がありません(" + " / ".join(reasons) + ")")
+        raise UpsampleUnavailable("prompt upsamplerに使える LLM がありません(" + " / ".join(reasons) + ")")
     with _cache_lock:
         _cache[key] = result
         while len(_cache) > CACHE_SIZE:

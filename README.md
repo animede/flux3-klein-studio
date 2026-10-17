@@ -1,22 +1,29 @@
-# FLUX 3 Image Klein Reference Studio（評価版）
+# FLUX 3 Image Klein Reference Studio（DiffusersサーバとGUIアプリ）
 
-FLUX 3 Image Kleinをローカルで使う画像生成アプリです。T2I、I2I、最大8枚のRef2Iに対応します。
+日本語 | [English](README.en.md)
+
+FLUX 3 Image KleinをDiffusersで動かし、8GBのVRAMに収めることを目的に開発したプロジェクトです。API機能を確かめるためのGUIアプリも提供しています。T2I、I2I、最大8枚の参照画像を使うRef2Iに対応します。
 
 > [!IMPORTANT]
 > アプリコードはApache-2.0ですが、FLUX 3モデルはFLUX Kommunity License v1.0です。モデル重みはこのリポジトリに含みません。詳細は[第三者ライセンスと注意事項](THIRD_PARTY_NOTICES.md)を確認してください。
 
-## 起動
+## 起動までの流れ
+
+| 手順 | コマンド | すること |
+|---|---|---|
+| 1. セットアップ | `./setup.sh flux3 --acknowledge-flux3-license` | Python 仮想環境(`.venv`)の作成、依存ライブラリのインストール、モデルのダウンロード。**サーバーは起動しません** |
+| 2. FastAPI サーバーの起動 | `./run.sh` | API サーバー(uvicorn)を起動します。Web アプリ(GUI)も同じサーバーが配信します |
+| 3. Web アプリを開く | ブラウザで http://127.0.0.1:7864/ | 別に起動するものはありません |
 
 ```bash
 git clone https://github.com/animede/flux3-klein-studio.git
 cd flux3-klein-studio
-./setup.sh flux3 --acknowledge-flux3-license
-CUDA_VISIBLE_DEVICES=0 ./run.sh
+./setup.sh flux3 --acknowledge-flux3-license   # 1. 初回だけ
+CUDA_VISIBLE_DEVICES=0 ./run.sh                 # 2. サーバーを起動(Ctrl+C で停止)
+# 3. ブラウザで http://127.0.0.1:7864/ を開く
 ```
 
-画面: http://127.0.0.1:7864/
-
-API仕様書: [docs/API.md](docs/API.md)
+API仕様書: [docs/API.md](docs/API.md)、APIリファレンス: [docs/API_REFERENCE.md](docs/API_REFERENCE.md)
 
 ## モデル
 
@@ -43,16 +50,18 @@ Baseは「より高品質な通常利用版」ではなく、追加学習用の�
 
 FLUX 3は、公式Comfy配布のdistilled INT8 ConvRot TransformerをDiffusers ModularPipelineへ直接接続します。約5.43GiBのTransformerをGPUに置き、Qwen3-VLテキストエンコーダーはCPUで実行する段階式Pipelineです。既定のCUDA allocator上限は8GiBで、ComfyUIは使用しません。
 
-公式はprompt upsamplerの使用を必須としています(短い入力は平凡な出力になり、1行の編集指示は構図まで変えてしまう)。このアプリは18.8GBの公式upsamplerの代わりに、BFL公式のシステムプロンプト(t2i / i2i / t2i_bbox / i2i_bbox)でLLMを動かします。画面の「LLMで公式形式に強化」、生成時の自動強化(`upsample=true`)、`POST /api/enhance-prompt`で使えます。編集では参照画像もLLMに見せます。
+公式はprompt upsamplerの使用を必須としています(短い入力は平凡な出力になり、1行の編集指示は構図まで変えてしまう)。このアプリは18.8GBの公式upsamplerの代わりに、BFL公式のシステムプロンプト(t2i / i2i / t2i_bbox / i2i_bbox)でLLMを動かします。**prompt upsamplerは標準で有効**で、生成のたびに入力文を完全なキャプションへ展開してから生成します。
+比較のために使わずに生成する(バイパス)こともできます。画面では「prompt upsamplerを使う」のチェックを外し、APIでは`upsample=false`を指定します。
+展開結果を生成前に確かめたいときは、画面の「prompt upsamplerで展開して確認」または`POST /api/enhance-prompt`を使います(確認したキャプションをそのまま生成すると、もう一度は展開しません)。編集では参照画像もLLMに見せます。
 
-LLMは次の順に試します。どれも使えなければ理由を表示します(自動強化では元の文のまま生成し警告を出す)。
+LLMは次の順に試します。どれも使えなければ、元の文のまま生成し、理由を警告として表示します(`upsample_strict=true`なら生成を止めます)。
 
 1. LLMサーバ: `KLEIN_PROMPT_LLM_URLS`(OpenAI互換のURLをカンマ区切りで、書いた順に試す。例: `http://127.0.0.1:8080/v1`。未設定ならLLMサーバは使わない)
 2. ローカルのgemma-4-E4B(llama.cpp の llama-server、画像入力用のmmproj付き)
    - 空きVRAMが`KLEIN_LOCAL_LLM_GPU_MIN_FREE_GIB`(既定8)以上ならGPUで動かし、使い終わったらすぐ停止
    - そうでなければ、空きメモリが`KLEIN_LOCAL_LLM_CPU_MIN_RAM_GIB`(既定10)以上でCPUに余裕があるときCPUで動かす
    - CPUではCPU向けにビルドしたllama-server(`KLEIN_LOCAL_LLM_SERVER_CPU`、既定`~/llama.cpp/build-cpu/bin/llama-server`)を使う。
-     GPU向けビルド(`GGML_NATIVE`/`AVX2`なし)をCPUで動かすと毎秒2トークン程度しか出ず、1回の強化に数分かかる。
+     GPU向けビルド(`GGML_NATIVE`/`AVX2`なし)をCPUで動かすと毎秒2トークン程度しか出ず、1回の展開に数分かかる。
      CPU向けは`cmake -B build-cpu -DGGML_NATIVE=ON -DGGML_CUDA=OFF && cmake --build build-cpu --target llama-server`で作れる
      (i5-12400Fで生成毎秒10トークン、1回20〜40秒)
    - 関連する設定: `KLEIN_LOCAL_LLM_SERVER`(GPU用)、`KLEIN_LOCAL_LLM_MODEL`、`KLEIN_LOCAL_LLM_MMPROJ`、`KLEIN_LOCAL_LLM_PORT`(既定7865)、`KLEIN_LOCAL_LLM=0`で無効
@@ -63,17 +72,69 @@ CUDA 13対応環境と`comfy-kitchen`のConvRotカーネルが必要です。
 
 Python 3.12、NVIDIA CUDA対応GPU、十分なRAMと空きディスクが必要です。`.venv`、`models`、`outputs`、`uploads`はGit管理されません。
 
-### FLUX 3を準備
+### 1. セットアップ(依存ライブラリとモデル)
 
-[通常版の公式配布ページ](https://huggingface.co/black-forest-labs/flux-3-image-klein)と[FLUX Kommunity License](https://huggingface.co/black-forest-labs/flux-3-image-klein/blob/main/LICENSE.md)を読み、Hugging Face上でアクセス条件に同意してから実行します。
+[通常版の公式配布ページ](https://huggingface.co/black-forest-labs/flux-3-image-klein)と[FLUX Kommunity License](https://huggingface.co/black-forest-labs/flux-3-image-klein/blob/main/LICENSE.md)を読み、Hugging Face上でアクセス条件に同意します。
+モデルはアクセス制限付きなので、`hf auth login`でログインするか、環境変数`HF_TOKEN`を設定してから実行します。
 
 ```bash
 ./setup.sh flux3 --acknowledge-flux3-license
 ```
 
-依存ライブラリだけ準備する場合は`./setup.sh none`を使います。
+`setup.sh`がすることは次の3つです。完了したら終了し、サーバーは起動しません。
 
-取得後の画像生成はローカルファイルだけで動作します。プロンプト強化を使った場合のみ、プロンプトと(編集時は)参照画像が`KLEIN_PROMPT_LLM_URLS`の設定先へ送信されます。ローカルLLMにフォールバックした場合は外部へ送信しません。
+1. `.venv`がなければ`python3.12 -m venv .venv`で作る
+2. `requirements.txt`の依存ライブラリをインストールする
+3. `download_models.py`でモデルを`models/`へダウンロードする(本体、INT8版、アウトペイントLoRA)
+
+依存ライブラリだけ準備する場合は`./setup.sh none`を使います。2回目以降の起動ではセットアップは不要です。
+
+### 2. FastAPI サーバーの起動
+
+```bash
+CUDA_VISIBLE_DEVICES=0 ./run.sh
+```
+
+`run.sh`は`.venv`のPythonで`uvicorn app:app`を起動します(ワーカー1つ)。`Uvicorn running on http://127.0.0.1:7864`と表示されたら起動完了で、`Ctrl+C`で停止します。
+モデルは起動時ではなく、最初の生成のときに読み込みます(数秒)。
+
+起動の確認:
+
+```bash
+curl http://127.0.0.1:7864/api/health
+```
+
+起動時に渡せる主な環境変数:
+
+| 変数 | 既定値 | 内容 |
+|---|---|---|
+| `CUDA_VISIBLE_DEVICES` | | 使うGPUの番号 |
+| `KLEIN_HOST` | `127.0.0.1` | 待ち受けるアドレス |
+| `KLEIN_PORT` | `7864` | ポート |
+| `KLEIN_MEMORY_BUDGET_GIB` | `8.0` | PyTorchのGPU割り当て上限(GiB) |
+| `KLEIN_PROMPT_LLM_URLS` | | prompt upsamplerに使うLLMサーバ(OpenAI互換、カンマ区切り) |
+
+```bash
+KLEIN_PROMPT_LLM_URLS=http://127.0.0.1:8080/v1 CUDA_VISIBLE_DEVICES=0 ./run.sh
+```
+
+その他の環境変数は[APIリファレンス](docs/API_REFERENCE.md#環境変数)を参照してください。
+
+### 3. Web アプリ(GUI)の起動
+
+Webアプリは手順2のサーバーが同じポートで配信するので、別に起動するものはありません。ブラウザで次を開きます。
+
+- Webアプリ: http://127.0.0.1:7864/
+- APIの画面(Swagger UI): http://127.0.0.1:7864/docs
+
+サーバーは既定で`127.0.0.1`だけで待ち受けるため、同じPCのブラウザからしか開けません。
+別のPCから使う場合は、SSHのポート転送(`ssh -L 7864:127.0.0.1:7864 <サーバー>`)を使うか、`KLEIN_HOST=0.0.0.0`で起動します。
+後者は認証がないので、信頼できるネットワークの中だけで使ってください。
+
+### 外部への送信
+
+画像生成はローカルファイルだけで動作します。prompt upsamplerは標準で有効なので、`KLEIN_PROMPT_LLM_URLS`を設定している場合は、生成のたびにプロンプトと(編集時は)参照画像がその送信先のLLMサーバへ送られます。
+`KLEIN_PROMPT_LLM_URLS`を設定しなければLLMサーバは使わず、ローカルLLM(llama.cpp)だけで展開するので、外部へは送信しません。バイパス(`upsample=false`)したときも送信しません。
 
 ## API
 
@@ -93,13 +154,49 @@ curl -X POST http://127.0.0.1:7864/api/generate \
 - `POST /api/jobs/JOB_ID/cancel`: 停止
 - `POST /api/unload`: 現在のモデルを解放
 
-完全な仕様は[API仕様書](docs/API.md)を参照してください。起動中はSwagger UI（`/docs`）、ReDoc（`/redoc`）、OpenAPI JSON（`/openapi.json`）も利用できます。
+使い方は[API仕様書](docs/API.md)、全エンドポイントの入出力とエラーは[APIリファレンス](docs/API_REFERENCE.md)を参照してください。起動中はSwagger UI（`/docs`）、ReDoc（`/redoc`）、OpenAPI JSON（`/openapi.json`）も利用できます。
 
 ## ライセンス
 
-このリポジトリで作成したアプリケーションコードは[Apache License 2.0](LICENSE)で提供します。モデル、モデル重み、トークナイザー、依存ライブラリには提供元のライセンスが適用されます。
+### このアプリ
 
-- [FLUX 3 Image Klein](https://huggingface.co/black-forest-labs/flux-3-image-klein)
-- [FLUX 3 Image Klein Base](https://huggingface.co/black-forest-labs/flux-3-image-klein-base)（比較対象。アプリでは未使用）
+Copyright 2026 YUZUKI
 
-実際の利用ではリンク先の最新の原文が優先されます。
+このリポジトリで作成したアプリケーションコードは [Apache License 2.0](LICENSE) で提供します。
+著作権表示と第三者の表示は [NOTICE](NOTICE) にあります。再配布するときは、Apache License 2.0 の条件に従い
+`LICENSE` と `NOTICE` を同梱してください。
+
+```text
+Copyright 2026 YUZUKI
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+```
+
+### モデル(このリポジトリには含みません)
+
+モデル、モデル重み、トークナイザー、依存ライブラリには、それぞれ提供元のライセンスが適用されます。
+Apache License 2.0 はモデルには及びません。
+
+| モデル | ライセンス |
+|---|---|
+| [FLUX 3 Image Klein](https://huggingface.co/black-forest-labs/flux-3-image-klein)(INT8 版は [flux-3-image-klein-comfy](https://huggingface.co/black-forest-labs/flux-3-image-klein-comfy)) | [FLUX Kommunity License v1.0](https://huggingface.co/black-forest-labs/flux-3-image-klein/blob/main/LICENSE.md)、[利用ポリシー](https://bfl.ai/legal/usage-policy) |
+| [FLUX 3 Image Klein Outpaint LoRA](https://huggingface.co/ausboss/FLUX-3-Image-Klein-Outpaint-LoRA)(コミュニティ製、任意) | FLUX Kommunity License |
+| [flux-3-image-klein-pup](https://huggingface.co/black-forest-labs/flux-3-image-klein-pup)(`system_prompts.json` のみ取得) | Apache License 2.0 |
+| [FLUX 3 Image Klein Base](https://huggingface.co/black-forest-labs/flux-3-image-klein-base)(比較対象。アプリでは未使用) | FLUX Kommunity License v1.0 |
+
+FLUX 3 Image Klein の公式の表示(モデルリポジトリの `NOTICE.md`)をそのまま記載します。
+
+> This FLUX Model is licensed by Black Forest Labs Inc. under the FLUX Kommunity License. Copyright Black Forest Labs Inc. IN NO EVENT SHALL BLACK FOREST LABS INC. BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH USE OF THIS MODEL.
+
+このアプリは Black Forest Labs の公式製品ではなく、同社の承認を受けたものでもありません。
+詳細は [第三者ライセンスと注意事項](THIRD_PARTY_NOTICES.md) を参照してください。実際の利用では、リンク先の最新の原文が優先されます。

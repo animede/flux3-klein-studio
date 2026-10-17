@@ -1,3 +1,17 @@
+# Copyright 2026 YUZUKI
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
 import io
 import threading
 import time
@@ -14,6 +28,11 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setattr(service, 'OUTPUTS', tmp_path)
     monkeypatch.setattr(service, 'UPLOADS', tmp_path)
     monkeypatch.setattr(service, 'model_available', lambda item: True)
+
+    # The upsampler is on by default; never reach a real LLM from tests.
+    def no_llm(*args, **kwargs):
+        raise service.upsampler.UpsampleUnavailable('no llm in tests')
+    monkeypatch.setattr(service.upsampler, 'upsample', no_llm)
     service.jobs.clear()
     with TestClient(service.app) as client:
         yield client
@@ -180,8 +199,23 @@ def test_upsample_replaces_prompt_and_records_source(client, monkeypatch):
         return Image.new('RGB', (width, height)), {'seconds': 1}
     monkeypatch.setattr(service.engine, 'generate', generate)
     monkeypatch.setattr(service.upsampler, 'upsample', lambda *a, **k: {'prompt': 'FULL CAPTION', 'source': 'remote:x', 'model': 'm', 'mode': 't2i', 'cached': False})
-    state = wait_job(client, client.post('/api/generate', data={'prompt': 'an apple', 'upsample': 'true'}).json()['id'])
-    assert state['status'] == 'done' and state['upsample_source'] == 'remote:x' and seen['prompt'] == 'FULL CAPTION'
+    # No `upsample` field: the upsampler runs by default.
+    state = wait_job(client, client.post('/api/generate', data={'prompt': 'an apple'}).json()['id'])
+    assert state['status'] == 'done' and state['upsample'] and state['upsample_source'] == 'remote:x'
+    assert seen['prompt'] == 'FULL CAPTION'
+
+
+def test_upsample_false_bypasses_the_upsampler(client, monkeypatch):
+    seen = {}
+
+    def generate(model, prompt, ref, width, height, seed, progress, cancel):
+        seen['prompt'] = prompt
+        return Image.new('RGB', (width, height)), {'seconds': 1}
+    monkeypatch.setattr(service.engine, 'generate', generate)
+    monkeypatch.setattr(service.upsampler, 'upsample', lambda *a, **k: pytest.fail('upsampler must be bypassed'))
+    state = wait_job(client, client.post('/api/generate', data={'prompt': 'an apple', 'upsample': 'false'}).json()['id'])
+    assert state['status'] == 'done' and not state['upsample'] and state['upsample_source'] is None
+    assert state['warning'] is None and seen['prompt'] == 'an apple'
 
 
 def test_enhance_prompt_maps_unavailable_to_503(client, monkeypatch):
@@ -189,3 +223,10 @@ def test_enhance_prompt_maps_unavailable_to_503(client, monkeypatch):
         raise service.upsampler.UpsampleUnavailable('no llm')
     monkeypatch.setattr(service.upsampler, 'upsample', unavailable)
     assert client.post('/api/enhance-prompt', data={'prompt': 'apple'}).status_code == 503
+
+
+def test_enhance_prompt_rejects_non_image_upload(client, monkeypatch):
+    monkeypatch.setattr(service.upsampler, 'upsample', lambda *a, **k: pytest.fail('upsample must not run'))
+    response = client.post('/api/enhance-prompt', data={'prompt': 'make it blue'},
+                           files={'image': ('x.png', b'not an image', 'image/png')})
+    assert response.status_code == 422

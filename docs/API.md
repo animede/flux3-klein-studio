@@ -1,7 +1,10 @@
 # API仕様
 
-FLUX 3 Image Klein Reference Studio（評価版）は、FLUX 3向けのジョブ方式HTTP APIを提供します。既定のベースURLは`http://127.0.0.1:7864`です。
+日本語 | [English](API.en.md)
 
+FLUX 3 Image Klein Reference Studio（DiffusersサーバとGUIアプリ）は、FLUX 3向けのジョブ方式HTTP APIを提供します。既定のベースURLは`http://127.0.0.1:7864`です。
+
+- 全エンドポイントの入出力・エラー・環境変数の一覧: [APIリファレンス](API_REFERENCE.md)
 - Swagger UI: `/docs`
 - ReDoc: `/redoc`
 - OpenAPI 3.1 JSON: `/openapi.json`
@@ -39,16 +42,16 @@ FLUX 3 Image Klein Reference Studio（評価版）は、FLUX 3向けのジョブ
 | `seed` | いいえ | `-1` | `-1`はランダム、固定値は0〜4294967295 |
 | `outpaint` | いいえ | `false` | `true`でアウトペイントLoRAを使用。参照画像はちょうど1枚(それ以外は422) |
 | `boxes` | いいえ | 空文字 | 0〜1000座標のJSON配列、最大32件。配置は`{id, bbox, desc}`、編集は`{id, from, src_bbox, tgt_bbox, desc}`(`tgt_bbox: null`で削除)。座標は`[top, left, bottom, right]` |
-| `upsample` | いいえ | `false` | `true`で生成前にプロンプトを完全なキャプションへ展開(`/api/enhance-prompt`と同じ処理) |
+| `upsample` | いいえ | `true` | prompt upsampler。生成前にプロンプトを完全なキャプションへ展開(`/api/enhance-prompt`と同じ処理)。`false`でバイパス(比較用、または展開済みのキャプションを送るとき) |
 | `upsample_strict` | いいえ | `false` | `true`ならupsampleが使えないときに生成を止める(既定は元のプロンプトで生成し`warning`を付ける) |
 
 参照画像を省略するとT2I、1枚以上指定するとI2I / Ref2Iになります。PNG、JPEG、WebPを推奨します。参照画像はVRAM使用量を抑えるため、枚数とモデルに応じて自動縮小されます。
 
-生成は16 stepです。FLUX 3は完全なscene captionを前提にしているため、短い依頼文を送る場合は`upsample=true`を付けるか、先に`/api/enhance-prompt`で展開してください。
+生成は16 stepです。FLUX 3は完全なscene captionを前提にしているため、既定ではprompt upsamplerで展開してから生成します。`/api/enhance-prompt`で展開済みのキャプションや、自分で書いた完全なキャプションを送る場合は、二重に展開しないよう`upsample=false`を付けてください。
 
 `boxes`はモデルカードの書式どおり、キャプションの後に空白1つを挟んでJSON配列として付けます。各要素はキャプション中で`<id>`の形で引用してください(例: `Remove the handbag <bag_1>.`)。複数参照の編集では、n枚目の参照を`<ref_image_n>`で指せます。
 
-## プロンプト強化(prompt upsampler)
+## prompt upsampler
 
 ### `POST /api/enhance-prompt`
 
@@ -153,7 +156,7 @@ curl -X POST http://127.0.0.1:7864/api/generate \
 | 状態 | 意味 |
 |---|---|
 | `queued` | 実行待ち |
-| `upsampling` | プロンプトを展開中(`upsample=true`のとき) |
+| `upsampling` | プロンプトを展開中(`upsample=false`以外) |
 | `switching` | 前のモデルを解放中 |
 | `loading` | 選択モデルを読み込み中 |
 | `encoding` | プロンプト・参照画像を処理中 |
@@ -162,7 +165,7 @@ curl -X POST http://127.0.0.1:7864/api/generate \
 | `error` | 失敗。`message`に理由を格納 |
 | `cancelled` | 停止済み |
 
-完了時は`metrics`、`image_url`、`metadata_url`が追加されます。`upsample=true`のときは`upsample_source`(使ったLLM)、展開できずに元のプロンプトで生成したときは`warning`が入ります。メタデータJSONには展開前のプロンプト(`original_prompt`)も記録されます。
+完了時は`metrics`、`image_url`、`metadata_url`が追加されます。prompt upsamplerを使ったときは`upsample_source`(使ったLLM)、展開できずに元のプロンプトで生成したときは`warning`が入ります。メタデータJSONには展開前のプロンプト(`original_prompt`)も記録されます。
 
 ```json
 {
@@ -202,7 +205,7 @@ curl -X POST http://127.0.0.1:7864/api/jobs/JOB_ID/cancel
 curl -X POST http://127.0.0.1:7864/api/unload
 ```
 
-停止要求は生成中ならステップの区切りで反映されます(数百ミリ秒以内)。モデル読み込み中は即時停止できません。生成中に`/api/unload`を呼ぶと`409 Conflict`になります。
+停止要求は生成中ならステップの区切りで反映されます(通常1〜2秒以内)。モデル読み込み中は即時停止できません。生成中に`/api/unload`を呼ぶと`409 Conflict`になります。
 
 ## モデル・状態確認
 

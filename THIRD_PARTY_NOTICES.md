@@ -4,7 +4,7 @@ This repository contains application source code. It does **not** distribute mod
 weights. The `models/` directory and generated images are excluded from Git.
 
 The repository's [Apache License 2.0](LICENSE) applies only to the application code
-authored for Klein Reference Studio. It does not grant rights to model weights,
+authored for FLUX 3 Image Klein Reference Studio (Copyright 2026 YUZUKI; see [NOTICE](NOTICE)). It does not grant rights to model weights,
 model names, third-party software, or generated content. The controlling license is
 always the license published by each provider.
 
@@ -14,6 +14,11 @@ always the license published by each provider.
 - Training/research checkpoint, not used by this application: [black-forest-labs/flux-3-image-klein-base](https://huggingface.co/black-forest-labs/flux-3-image-klein-base)
 - License: [FLUX Kommunity License v1.0](https://huggingface.co/black-forest-labs/flux-3-image-klein/blob/main/LICENSE.md)
 - Usage rules: [Black Forest Labs Usage Policy](https://bfl.ai/legal/usage-policy)
+- INT8 (ConvRot) checkpoint used by this application: [black-forest-labs/flux-3-image-klein-comfy](https://huggingface.co/black-forest-labs/flux-3-image-klein-comfy) (same license)
+
+Official notice (`NOTICE.md` of the model repository), reproduced verbatim:
+
+> This FLUX Model is licensed by Black Forest Labs Inc. under the FLUX Kommunity License. Copyright Black Forest Labs Inc. IN NO EVENT SHALL BLACK FOREST LABS INC. BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH USE OF THIS MODEL.
 
 The FLUX 3 weights are not covered by this repository's Apache-2.0 license. The
 FLUX Kommunity License permits non-commercial use and contains a commercial-output
@@ -27,7 +32,19 @@ The downloader therefore requires `--acknowledge-flux3-license`. This records on
 the operator's acknowledgement; it does not replace acceptance of the gated model
 terms on Hugging Face and does not modify the license. The application downloads
 the distilled inference checkpoint only. It does not download the Base checkpoint
-or the separate prompt upsampler.
+or the prompt upsampler model.
+
+## FLUX 3 Image Klein Outpaint LoRA (optional)
+
+- Model: [ausboss/FLUX-3-Image-Klein-Outpaint-LoRA](https://huggingface.co/ausboss/FLUX-3-Image-Klein-Outpaint-LoRA) (community-made, pinned revision)
+- License: FLUX Kommunity License (a Derivative of FLUX 3 Image Klein); the FLUX 3 terms above apply.
+
+## FLUX 3 Image Klein prompt upsampler system prompts
+
+- Source: [black-forest-labs/flux-3-image-klein-pup](https://huggingface.co/black-forest-labs/flux-3-image-klein-pup)
+- License: Apache License 2.0
+- The application downloads only `system_prompts.json` from this repository and sends
+  those prompts to the configured LLM. The 9B upsampler model itself is not used.
 
 ## Python packages
 

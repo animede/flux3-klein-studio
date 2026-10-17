@@ -1,8 +1,23 @@
 <!doctype html>
+<!--
+  Copyright 2026 YUZUKI
+
+  Licensed under the Apache License, Version 2.0 (the "License");
+  you may not use this file except in compliance with the License.
+  You may obtain a copy of the License at
+
+      http://www.apache.org/licenses/LICENSE-2.0
+
+  Unless required by applicable law or agreed to in writing, software
+  distributed under the License is distributed on an "AS IS" BASIS,
+  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+  See the License for the specific language governing permissions and
+  limitations under the License.
+-->
 <html lang="ja">
 <head>
   <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>FLUX 3 Image Klein Reference Studio（評価版）</title>
+  <title>FLUX 3 Image Klein Reference Studio（DiffusersサーバとGUIアプリ）</title>
   <link rel="stylesheet" href="/static/style.css">
   <style>
     .reference-previews{width:100%;height:100%;padding:10px;display:grid;grid-template-columns:repeat(4,1fr);grid-template-rows:repeat(2,1fr);gap:7px;pointer-events:none}
@@ -21,7 +36,7 @@
   <script src="/static/app.js" defer></script>
 </head>
 <body>
-<header><div class="brand"><span class="brand-mark">k</span><div>FLUX 3 Image Klein <span class="muted">Reference Studio · 評価版</span></div></div><nav><span id="model-badge" class="badge">LOCAL · INT8 ConvRot</span><a href="/docs" target="_blank" rel="noopener">API ↗</a></nav></header>
+<header><div class="brand"><span class="brand-mark">k</span><div>FLUX 3 Image Klein <span class="muted">Reference Studio · DiffusersサーバとGUIアプリ</span></div></div><nav><span id="model-badge" class="badge">LOCAL · INT8 ConvRot</span><a href="/docs" target="_blank" rel="noopener">API ↗</a></nav></header>
 <main>
   <div class="intro"><div class="eyebrow">YOUR CHARACTER, A NEW SCENE</div><h1>同じキャラクターで、次の一枚。</h1><p>参照画像と、描きたい場面を指定してください。画像はこのサーバー内で処理されます。</p></div>
   <div class="workspace">
@@ -41,8 +56,8 @@
       <textarea id="prompt" name="prompt" rows="5" maxlength="4000" required placeholder="例：参照画像のキャラクターが、窓辺で本を読んでいる。顔・髪型・衣装の特徴を保つ。"></textarea>
       <div class="prompt-actions"><button type="button" id="example-prompt" class="text-button example">＋ キャラクター保持の例文を入れる</button>
       <button type="button" id="expand-prompt" class="text-button example">＋ 詳細なscene captionに展開</button>
-      <button type="button" id="llm-prompt" class="text-button example">✦ LLMで公式形式に強化</button></div>
-      <label><input id="auto-upsample" name="upsample" type="checkbox"> 生成時にLLMで自動的に強化する（使えないときは元の文で生成）</label>
+      <button type="button" id="llm-prompt" class="text-button example">✦ prompt upsamplerで展開して確認</button></div>
+      <label><input id="auto-upsample" name="upsample" type="checkbox" checked> prompt upsamplerを使う（公式の推奨。オフにすると入力文をそのまま送るバイパス＝比較用。使えないときは元の文で生成）</label>
       <label class="boxes-label">レイアウト指定（任意・0〜1000座標のJSON）<textarea id="boxes" rows="3" placeholder='[{"id":"subject_1","bbox":[150,150,850,850],"desc":"主役の被写体"}]'></textarea></label>
       <div class="box-editor"><div class="box-editor-title">画像上でドラッグして配置範囲を指定</div><canvas id="box-canvas" width="640" height="360"></canvas><button type="button" id="clear-boxes" class="text-button">矩形をクリア</button></div>
       <div class="settings"><label>出力サイズ<select id="size"><option value="768,768">768 × 768 · 正方形</option><option value="512,512">512 × 512 · 軽量</option><option value="768,1024">768 × 1024 · 縦長</option><option value="1024,768">1024 × 768 · 横長</option><option value="1024,1024">1024 × 1024 · 高解像度</option></select></label><label>シード<input id="seed" name="seed" type="number" min="-1" max="4294967295" value="-1"><small>−1で毎回ランダム</small></label></div>

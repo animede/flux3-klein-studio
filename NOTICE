@@ -1,0 +1,44 @@
+FLUX 3 Image Klein Reference Studio
+Copyright 2026 YUZUKI
+
+This product is licensed under the Apache License, Version 2.0 (see LICENSE).
+The Apache License applies only to the application source code in this
+repository. It does not apply to model weights, which are not included here.
+
+-------------------------------------------------------------------------------
+Third-party models used by this application (downloaded separately, not
+distributed with this repository)
+-------------------------------------------------------------------------------
+
+FLUX 3 Image Klein
+https://huggingface.co/black-forest-labs/flux-3-image-klein
+License: FLUX Kommunity License v1.0
+https://huggingface.co/black-forest-labs/flux-3-image-klein/blob/main/LICENSE.md
+
+Official notice from Black Forest Labs (NOTICE.md of the model repository):
+
+  This FLUX Model is licensed by Black Forest Labs Inc. under the FLUX
+  Kommunity License. Copyright Black Forest Labs Inc. IN NO EVENT SHALL BLACK
+  FOREST LABS INC. BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+  IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
+  CONNECTION WITH USE OF THIS MODEL.
+
+The INT8 (ConvRot) checkpoint is downloaded from the official ComfyUI
+distribution under the same license:
+https://huggingface.co/black-forest-labs/flux-3-image-klein-comfy
+
+FLUX 3 Image Klein Outpaint LoRA (optional, community-made)
+https://huggingface.co/ausboss/FLUX-3-Image-Klein-Outpaint-LoRA
+License: FLUX Kommunity License (a Derivative of FLUX 3 Image Klein)
+
+FLUX 3 Image Klein prompt upsampler (flux-3-image-klein-pup)
+https://huggingface.co/black-forest-labs/flux-3-image-klein-pup
+License: Apache License 2.0
+This application downloads only the official system prompts
+(system_prompts.json) from that repository. The upsampler model itself is not used.
+
+FLUX and Black Forest Labs are trademarks of their respective owners. This
+project is an independent work and is not affiliated with or endorsed by
+Black Forest Labs Inc.
+
+See THIRD_PARTY_NOTICES.md for details.
