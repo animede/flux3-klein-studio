@@ -14,20 +14,20 @@ function busy(value) {
   $('progress-track').hidden = !value;
 }
 const modelInfo = {
-  '4b': { badge: 'LOCAL · 4B', note: 'Q4 / NF4 · Apache-2.0', footer: 'FLUX.2 klein 4B · GGUF Q4 / NF4 · Apache-2.0' },
-  '9b': { badge: 'LOCAL · 9B · 非商用・非本番', note: 'Q3 / NF4 · FLUX Non-Commercial License v2.1', footer: 'FLUX.2 klein 9B · GGUF Q3 / NF4 · 非商用・非本番' },
+  'flux3': { label: 'FLUX 3 Image Klein · 最新世代', badge: 'LOCAL · FLUX 3 · 5.6B', note: '公式INT8 ConvRot · 16ステップ · FLUX Kommunity License v1.0', footer: 'FLUX 3 Image Klein · 公式INT8 ConvRot · 16ステップ · FLUX Kommunity License v1.0', status: 'FLUX 3を選択しました。短文ではなく、構図・被写体・背景・照明まで含む詳しいプロンプトを推奨します。' },
 };
 function updateModelInfo() {
   const key = $('model').value;
   const info = modelInfo[key];
   $('model-badge').textContent = info.badge;
   $('model-note').textContent = info.note;
-  $('model-note').classList.toggle('license-warning', key === '9b');
+  $('model-note').classList.add('license-warning');
   $('model-footer').textContent = info.footer;
   localStorage.setItem('klein-model', key);
-  showStatus(key === '9b' ? '9Bを選択しました。非商用・非本番用途に限られ、追加の利用条件があります。' : '4Bを選択しました。');
+  showStatus(info.status);
 }
-$('model').value = localStorage.getItem('klein-model') || '4b';
+const savedModel = localStorage.getItem('klein-model');
+$('model').value = 'flux3';
 $('model').addEventListener('change', updateModelInfo);
 updateModelInfo();
 async function loadModelAvailability() {
@@ -35,9 +35,7 @@ async function loadModelAvailability() {
   for (const option of $('model').options) {
     const available = data.models[option.value]?.available;
     option.disabled = !available;
-    option.textContent = option.value === '4b'
-      ? `FLUX.2 klein 4B · 軽量${available ? '' : '（未取得）'}`
-      : `FLUX.2 klein 9B · 高品質${available ? '' : '（未取得）'}`;
+    option.textContent = `${modelInfo[option.value].label}${available ? '' : '（未取得）'}`;
   }
   if ($('model').selectedOptions[0].disabled) {
     const available = [...$('model').options].find(option => !option.disabled);
@@ -108,7 +106,7 @@ async function poll(id) {
       }
       showStatus(job.message, job.status === 'error');
       $('result-state').textContent = job.status.toUpperCase();
-      $('progress-fill').style.width = `${job.step / 4 * 100}%`;
+      $('progress-fill').style.width = `${job.step / job.steps * 100}%`;
       if (job.status === 'done') {
         $('result-image').src = job.image_url;
         $('result-image').hidden = false;
@@ -120,8 +118,8 @@ async function poll(id) {
         $('metadata').hidden = false;
         lastSeed = job.seed;
         const m = job.metrics;
-        const quant = job.model === '9b' ? 'GGUF Q3 / NF4 · 非商用・非本番' : 'GGUF Q4 / NF4 · Apache-2.0';
-        $('metrics').textContent = `モデル：${job.model_name}\nシード：${job.seed}\n生成時間：${m.seconds}秒（読み込み込み ${m.total_seconds}秒）\nピークVRAM：割り当て ${m.peak_allocated_gib} GiB / 予約 ${m.peak_reserved_gib} GiB\nGPU：${m.gpu}\nPyTorch割り当て上限：${m.allocator_budget_gib} GiB\n4ステップ · ${quant}\n※VRAM値はPyTorch計測。ドライバー等の使用量は含みません。`;
+        const quant = '公式INT8 ConvRot · FLUX Kommunity License v1.0';
+        $('metrics').textContent = `モデル：${job.model_name}\nシード：${job.seed}\n生成時間：${m.seconds}秒（読み込み込み ${m.total_seconds}秒）\nピークVRAM：割り当て ${m.peak_allocated_gib} GiB / 予約 ${m.peak_reserved_gib} GiB\nGPU：${m.gpu}\nPyTorch割り当て上限：${m.allocator_budget_gib} GiB\n${m.steps}ステップ · ${quant}\n※VRAM値はPyTorch計測。ドライバー等の使用量は含みません。`;
       }
       if (['done', 'error', 'cancelled'].includes(job.status)) {
         activeJob = null; localStorage.removeItem('klein-job'); busy(false); break;
@@ -141,12 +139,45 @@ $('generate-form').addEventListener('submit', async event => {
   const data = new FormData();
   data.set('prompt', $('prompt').value); data.set('model', $('model').value); data.set('width', width); data.set('height', height);
   data.set('seed', $('seed').value);
+  data.set('outpaint', $('outpaint').checked ? 'true' : 'false');
+  data.set('boxes', $('boxes').value);
   for (const file of $('image-input').files) data.append('image', file);
   try {
     const job = await request('/api/generate', { method: 'POST', body: data });
     activeJob = job.id; localStorage.setItem('klein-job', job.id); await poll(job.id);
   } catch (error) { showStatus(error.message, true); busy(false); $('result-state').textContent = 'ERROR'; }
 });
+$('expand-prompt').onclick = () => {
+  const field = $('prompt');
+  const text = field.value.trim();
+  if (!text) return;
+  field.value = `${text}. Full scene caption: describe the subject's appearance, exact position and scale in the frame, environment and background, lighting direction and quality, camera angle and lens perspective, color palette, materials, textures, depth of field, and the continuity of all reference images. Preserve important identity and composition details.`;
+  field.focus();
+};
+$('llm-prompt').onclick = async () => {
+  const field = $('prompt');
+  if (!field.value.trim()) return;
+  const button = $('llm-prompt'); button.disabled = true; button.textContent = 'LLMで強化中…';
+  try {
+    const data = new FormData(); data.set('prompt', field.value); data.set('mode', $('image-input').files.length ? 'i2i' : 't2i');
+    const result = await request('/api/enhance-prompt', {method: 'POST', body: data});
+    field.value = result.prompt;
+  } catch (error) { showStatus(error.message, true); }
+  finally { button.disabled = false; button.textContent = '✦ LLMで公式形式に強化'; }
+};
+const boxCanvas = $('box-canvas');
+const boxCtx = boxCanvas.getContext('2d');
+let boxImage = null; let drawnBoxes = []; let boxStart = null;
+function paintBoxes() {
+  boxCtx.fillStyle = '#111'; boxCtx.fillRect(0, 0, boxCanvas.width, boxCanvas.height);
+  if (boxImage) { const scale = Math.min(boxCanvas.width / boxImage.width, boxCanvas.height / boxImage.height); const w = boxImage.width * scale, h = boxImage.height * scale; boxCtx.drawImage(boxImage, (boxCanvas.width-w)/2, (boxCanvas.height-h)/2, w, h); }
+  drawnBoxes.forEach((b, i) => { const x=b.bbox[1]*boxCanvas.width/1000, y=b.bbox[0]*boxCanvas.height/1000, w=(b.bbox[3]-b.bbox[1])*boxCanvas.width/1000, h=(b.bbox[2]-b.bbox[0])*boxCanvas.height/1000; boxCtx.strokeStyle='#c0efbb'; boxCtx.lineWidth=2; boxCtx.strokeRect(x,y,w,h); boxCtx.fillStyle='#c0efbb'; boxCtx.fillText(b.id || `box_${i+1}`, x+4, y+14); });
+}
+function syncBoxes() { $('boxes').value = JSON.stringify(drawnBoxes, null, 2); paintBoxes(); }
+$('image-input').addEventListener('change', () => { const file=$('image-input').files[0]; if (!file) return; const img=new Image(); img.onload=()=>{boxImage=img;paintBoxes();}; img.src=URL.createObjectURL(file); });
+boxCanvas.addEventListener('pointerdown', e => { const r=boxCanvas.getBoundingClientRect(); boxStart=[(e.clientX-r.left)*boxCanvas.width/r.width,(e.clientY-r.top)*boxCanvas.height/r.height]; boxCanvas.setPointerCapture(e.pointerId); });
+boxCanvas.addEventListener('pointerup', e => { if (!boxStart) return; const r=boxCanvas.getBoundingClientRect(); const x=(e.clientX-r.left)*boxCanvas.width/r.width,y=(e.clientY-r.top)*boxCanvas.height/r.height; const x1=Math.max(0,Math.min(boxStart[0],x))*1000/boxCanvas.width,y1=Math.max(0,Math.min(boxStart[1],y))*1000/boxCanvas.height,x2=Math.min(boxCanvas.width,Math.max(boxStart[0],x))*1000/boxCanvas.width,y2=Math.min(boxCanvas.height,Math.max(boxStart[1],y))*1000/boxCanvas.height; drawnBoxes.push({id:`box_${drawnBoxes.length+1}`,bbox:[Math.round(y1),Math.round(x1),Math.round(y2),Math.round(x2)],desc:'配置要素'}); boxStart=null; syncBoxes(); });
+$('clear-boxes').onclick = () => { drawnBoxes=[]; syncBoxes(); };
 $('cancel').onclick = async () => {
   if (!activeJob) return;
   $('cancel').disabled = true;

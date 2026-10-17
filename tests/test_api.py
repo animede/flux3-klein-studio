@@ -13,6 +13,7 @@ from engine import Cancelled
 def client(tmp_path, monkeypatch):
     monkeypatch.setattr(service, 'OUTPUTS', tmp_path)
     monkeypatch.setattr(service, 'UPLOADS', tmp_path)
+    monkeypatch.setattr(service, 'model_available', lambda item: True)
     service.jobs.clear()
     with TestClient(service.app) as client:
         yield client
@@ -43,7 +44,7 @@ def test_bad_inputs(client):
 
 def test_reference_and_result(client, monkeypatch):
     def generate(model, prompt, ref, width, height, seed, progress, cancel):
-        assert model == '4b'
+        assert model == 'flux3'
         assert ref.mode == 'RGB' and ref.size == (768, 384)
         assert ref.getpixel((0, 0)) == (255, 255, 255)
         assert seed == 12
@@ -59,26 +60,39 @@ def test_reference_and_result(client, monkeypatch):
 
 def test_eight_references_adaptive_size_and_limit(client, monkeypatch):
     def generate(model, prompt, refs, width, height, seed, progress, cancel):
-        assert model == '9b'
+        assert model == 'flux3'
         assert isinstance(refs, list) and len(refs) == 8
         assert all(ref.mode == 'RGB' for ref in refs)
-        assert all(ref.size == (384, 192) for ref in refs)
+        assert all(ref.size == (768, 384) for ref in refs)
         return Image.new('RGB', (width, height)), {'seconds': 1}
     monkeypatch.setattr(service.engine, 'generate', generate)
     files = [('image', (f'ref-{index}.png', png_bytes((index, 0, 0, 255)), 'image/png')) for index in range(8)]
-    response = client.post('/api/generate', data={'prompt': 'combine eight', 'model': '9b'}, files=files)
+    response = client.post('/api/generate', data={'prompt': 'combine eight'}, files=files)
     state = wait_job(client, response.json()['id'])
     assert state['status'] == 'done' and state['reference_count'] == 8
-    assert state['reference_max_side'] == 384
+    assert state['reference_max_side'] == 768
     metadata = (service.OUTPUTS / (state['id'] + '.json')).read_text()
     assert '"reference_count": 8' in metadata
-    assert '"reference_max_side": 384' in metadata
+    assert '"reference_max_side": 768' in metadata
     assert all((service.UPLOADS / f"{state['id']}_ref_{index}.png").exists() for index in range(1, 9))
 
     nine_files = [('image', (f'ref-{index}.png', png_bytes(), 'image/png')) for index in range(9)]
     too_many = client.post('/api/generate', data={'prompt': 'too many'}, files=nine_files)
     assert too_many.status_code == 422
     assert '8枚まで' in too_many.json()['detail']
+
+
+def test_flux3_uses_its_step_count(client, monkeypatch):
+    def generate(model, prompt, refs, width, height, seed, progress, cancel):
+        assert model == 'flux3'
+        return Image.new('RGB', (width, height)), {'seconds': 1, 'steps': 16}
+    monkeypatch.setattr(service.engine, 'generate', generate)
+    response = client.post('/api/generate', data={'prompt': 'a detailed scene', 'model': 'flux3'})
+    assert response.status_code == 202
+    assert response.json()['steps'] == 16
+    state = wait_job(client, response.json()['id'])
+    assert state['status'] == 'done'
+    assert state['step'] == state['steps'] == 16
 
 
 def test_busy_cancel_and_recovery(client, monkeypatch):
@@ -106,12 +120,12 @@ def test_failure_releases_worker(client, monkeypatch):
     assert not client.get('/api/health').json()['busy']
 
 
-def test_health_lists_both_models(client):
+def test_health_lists_flux3(client):
     health = client.get('/api/health').json()
-    assert health['default_model'] == '4b'
-    assert set(health['models']) == {'4b', '9b'}
-    assert health['models']['4b']['available']
+    assert health['default_model'] == 'flux3'
+    assert set(health['models']) == {'flux3'}
+    assert health['models']['flux3']['available']
     models = client.get('/api/models').json()
-    assert models['default'] == '4b'
-    assert models['models']['9b']['quantization'] == 'GGUF Q3_K_M'
-    assert models['models']['9b']['available']
+    assert models['default'] == 'flux3'
+    assert models['models']['flux3']['quantization'] == 'Official INT8 ConvRot'
+    assert models['models']['flux3']['available']

@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 cd "$(dirname "$0")"
-model_choice="${1:-4b}"
-if [[ "$model_choice" != "all" && "$model_choice" != "4b" && "$model_choice" != "9b" && "$model_choice" != "none" ]]; then
-  echo "Usage: ./setup.sh [all|4b|9b|none] [--acknowledge-9b-license]" >&2
+model_choice="${1:-flux3}"
+if [[ "$model_choice" != "flux3" && "$model_choice" != "none" ]]; then
+  echo "Usage: ./setup.sh [flux3|none] [--acknowledge-flux3-license]" >&2
   exit 2
 fi
 # Remove development-machine links if this folder was copied to another PC.
-for path in .venv models/klein-4b models/gguf/flux-2-klein-4b-Q4_K_M.gguf; do
+for path in .venv models/flux-3-image-klein models/flux-3-image-klein-int8; do
   if [[ -L "$path" && ! -e "$path" ]]; then
     rm "$path"
   fi

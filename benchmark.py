@@ -50,7 +50,7 @@ cases = [
 ]
 
 engine = Engine()
-model_key = os.getenv("BENCH_MODEL", "9b")
+model_key = os.getenv("BENCH_MODEL", "flux3")
 for case in cases:
     selected = os.getenv("BENCH_CASE")
     if selected and case["name"] != selected:

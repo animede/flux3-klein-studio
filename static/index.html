@@ -2,7 +2,7 @@
 <html lang="ja">
 <head>
   <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Klein Reference Studio</title>
+  <title>FLUX 3 Image Klein Reference Studio（評価版）</title>
   <link rel="stylesheet" href="/static/style.css">
   <style>
     .reference-previews{width:100%;height:100%;padding:10px;display:grid;grid-template-columns:repeat(4,1fr);grid-template-rows:repeat(2,1fr);gap:7px;pointer-events:none}
@@ -14,17 +14,20 @@
     .reference-item span{position:absolute;top:6px;left:6px;width:21px;height:21px;display:grid;place-items:center;border-radius:50%;background:#101515d9;color:var(--accent);font-size:10px;border:1px solid #506259}
     .image-meta{min-width:0}.image-meta #reference-name{min-width:0;flex:1}.image-meta #clear-image{flex:none;white-space:nowrap}
     .model-row{display:grid;grid-template-columns:1fr;gap:8px;margin-bottom:24px}.model-row label{color:var(--muted);font-size:12px}.model-row select{width:100%;height:44px;padding:0 12px;margin-top:9px}.model-note{font-size:11px;color:var(--muted);line-height:1.6}.license-warning{color:#f0ca86}
+    .boxes-label{display:block;color:var(--muted);font-size:12px;line-height:1.8;margin-top:12px}.boxes-label textarea{display:block;margin-top:7px}
+    .prompt-actions{display:flex;flex-direction:column;align-items:flex-start;gap:2px;margin-top:4px}
+    .box-editor{margin-top:10px;color:var(--muted);font-size:11px}.box-editor-title{margin-bottom:6px}.box-editor canvas{display:block;width:100%;max-height:300px;background:#111;border:1px solid var(--line);border-radius:8px;cursor:crosshair;object-fit:contain}
   </style>
   <script src="/static/app.js" defer></script>
 </head>
 <body>
-<header><div class="brand"><span class="brand-mark">k</span><div>Klein <span class="muted">Reference Studio</span></div></div><nav><span id="model-badge" class="badge">LOCAL · 4B</span><a href="/docs" target="_blank" rel="noopener">API ↗</a></nav></header>
+<header><div class="brand"><span class="brand-mark">k</span><div>FLUX 3 Image Klein <span class="muted">Reference Studio · 評価版</span></div></div><nav><span id="model-badge" class="badge">LOCAL · INT8 ConvRot</span><a href="/docs" target="_blank" rel="noopener">API ↗</a></nav></header>
 <main>
   <div class="intro"><div class="eyebrow">YOUR CHARACTER, A NEW SCENE</div><h1>同じキャラクターで、次の一枚。</h1><p>参照画像と、描きたい場面を指定してください。画像はこのサーバー内で処理されます。</p></div>
   <div class="workspace">
     <form id="generate-form" class="panel controls">
       <div class="section-label"><span>01</span><h2>モデル</h2></div>
-      <div class="model-row"><label>使用モデル<select id="model" name="model"><option value="4b">FLUX.2 klein 4B · 軽量</option><option value="9b">FLUX.2 klein 9B · 高品質（非商用・非本番）</option></select></label><div id="model-note" class="model-note">Q4 / NF4 · Apache-2.0</div></div>
+      <div class="model-row"><label>使用モデル<select id="model" name="model"><option value="flux3">FLUX 3 Image Klein · 公式INT8</option></select></label><div id="model-note" class="model-note">公式INT8 ConvRot · FLUX Kommunity License v1.0</div></div>
       <div class="section-label"><span>02</span><h2>参照画像</h2><span class="optional">任意 · 最大8枚</span></div>
       <label id="drop-zone" class="drop-zone" for="image-input">
         <input id="image-input" name="image" type="file" accept="image/png,image/jpeg,image/webp" multiple>
@@ -32,23 +35,28 @@
         <div id="reference-previews" class="reference-previews" aria-label="参照画像のプレビュー" hidden></div>
       </label>
       <div class="image-meta"><span id="reference-name">画像なしの場合はテキストから生成します</span><button id="clear-image" class="text-button" type="button" hidden>取り消す</button></div>
+      <label><input id="outpaint" name="outpaint" type="checkbox"> FLUX 3アウトペイント（灰色の余白を自然に拡張）</label>
       <div class="section-label prompt-label"><span>03</span><h2>描きたい場面</h2></div>
       <label class="sr-only" for="prompt">生成プロンプト</label>
       <textarea id="prompt" name="prompt" rows="5" maxlength="4000" required placeholder="例：参照画像のキャラクターが、窓辺で本を読んでいる。顔・髪型・衣装の特徴を保つ。"></textarea>
-      <button type="button" id="example-prompt" class="text-button example">＋ キャラクター保持の例文を入れる</button>
+      <div class="prompt-actions"><button type="button" id="example-prompt" class="text-button example">＋ キャラクター保持の例文を入れる</button>
+      <button type="button" id="expand-prompt" class="text-button example">＋ 詳細なscene captionに展開</button>
+      <button type="button" id="llm-prompt" class="text-button example">✦ LLMで公式形式に強化</button></div>
+      <label class="boxes-label">レイアウト指定（任意・0〜1000座標のJSON）<textarea id="boxes" rows="3" placeholder='[{"id":"subject_1","bbox":[150,150,850,850],"desc":"主役の被写体"}]'></textarea></label>
+      <div class="box-editor"><div class="box-editor-title">画像上でドラッグして配置範囲を指定</div><canvas id="box-canvas" width="640" height="360"></canvas><button type="button" id="clear-boxes" class="text-button">矩形をクリア</button></div>
       <div class="settings"><label>出力サイズ<select id="size"><option value="768,768">768 × 768 · 正方形</option><option value="512,512">512 × 512 · 軽量</option><option value="768,1024">768 × 1024 · 縦長</option><option value="1024,768">1024 × 768 · 横長</option><option value="1024,1024">1024 × 1024 · 高解像度</option></select></label><label>シード<input id="seed" name="seed" type="number" min="-1" max="4294967295" value="-1"><small>−1で毎回ランダム</small></label></div>
       <div class="actions"><button id="generate" class="primary" type="submit">画像を生成 <span>↗</span></button><button id="cancel" type="button" class="secondary" hidden>停止</button></div>
-      <p class="footnote">初回はモデルの読み込みに時間がかかります。参照画像の特徴が完全に保持されるとは限りません。</p>
+      <p class="footnote">初回はモデルの読み込みに時間がかかります。アウトペイントはFLUX 3で参照画像1枚を指定してください。</p>
     </form>
     <section class="panel result-panel" aria-label="生成結果">
       <div class="result-heading"><h2>生成結果</h2><span id="result-state" class="muted">READY</span></div>
       <div class="result-canvas" id="result-canvas"><div id="result-empty"><div class="canvas-symbol">✧</div><h3>ここから、新しい場面へ。</h3><p>生成した画像がここに表示されます。</p></div><img id="result-image" alt="生成された画像" hidden></div>
       <div class="status-area"><div id="status" role="status" aria-live="polite">準備ができています</div><div class="progress-track" id="progress-track" hidden><div id="progress-fill"></div></div></div>
       <div id="result-actions" class="result-actions" hidden><a id="download" class="secondary" download="klein-result.png">画像を保存 ↓</a><button type="button" id="reuse-seed" class="text-button">このシードを使う</button></div>
-      <details id="details"><summary>生成情報</summary><div id="metrics">FLUX.2 klein 4B · 4ステップ · 省メモリ構成</div><a id="metadata" hidden>設定をJSONで保存</a></details>
+      <details id="details"><summary>生成情報</summary><div id="metrics">FLUX 3 Image Klein · 公式INT8 ConvRot · 16ステップ</div><a id="metadata" hidden>設定をJSONで保存</a></details>
     </section>
   </div>
-  <footer><span id="model-footer">FLUX.2 klein 4B · GGUF Q4 / NF4 · Apache-2.0</span><button type="button" id="unload" class="text-button">モデルを解放</button></footer>
+  <footer><span id="model-footer">FLUX 3 Image Klein · 公式INT8 ConvRot · 16ステップ · FLUX Kommunity License v1.0</span><button type="button" id="unload" class="text-button">モデルを解放</button></footer>
 </main>
 </body>
 </html>

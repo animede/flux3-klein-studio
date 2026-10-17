@@ -1,18 +1,16 @@
-# Klein Reference Studio
+# FLUX 3 Image Klein Reference Studio（評価版）
 
-FLUX.2 klein 4Bと9Bを一つの画面・APIから切り替えて使うローカル画像生成アプリです。T2I、I2I、最大8枚のRef2Iに対応します。
+FLUX 3 Image Kleinをローカルで使う画像生成アプリです。T2I、I2I、最大8枚のRef2Iに対応します。
 
 > [!IMPORTANT]
-> このリポジトリのアプリコードはApache-2.0ですが、モデルは別ライセンスです。4BはApache-2.0、9BはFLUX Non-Commercial License v2.1（非商用・非本番用途）です。モデル重みはリポジトリに含みません。詳細は[第三者ライセンスと注意事項](THIRD_PARTY_NOTICES.md)を確認してください。
+> アプリコードはApache-2.0ですが、FLUX 3モデルはFLUX Kommunity License v1.0です。モデル重みはこのリポジトリに含みません。詳細は[第三者ライセンスと注意事項](THIRD_PARTY_NOTICES.md)を確認してください。
 
 ## 起動
 
-リポジトリを取得し、使用するモデルを準備してから起動します。
-
 ```bash
-git clone git@github.com:animede/flux2-klein-studio.git
-cd flux2-klein-studio
-./setup.sh 4b
+git clone git@github.com:animede/flux-klein-studio.git
+cd flux-klein-studio
+./setup.sh flux3 --acknowledge-flux3-license
 CUDA_VISIBLE_DEVICES=0 ./run.sh
 ```
 
@@ -20,29 +18,59 @@ CUDA_VISIBLE_DEVICES=0 ./run.sh
 
 API仕様書: [docs/API.md](docs/API.md)
 
-起動中の対話型API仕様: http://127.0.0.1:7864/docs
-
-画面上部の「使用モデル」で切り替えます。モデル切替時は現在のモデルをGPUとRAMから解放してから次を読み込むため、両モデルを同時にVRAMへ載せません。
-
 ## モデル
 
-| 選択値 | 用途 | 画像モデル | テキスト側 | ライセンス表示 |
-|---|---|---|---|---|
-| `4b` | 軽量・高速・通常利用 | GGUF Q4_K_M | Qwen3-4B NF4 | Apache-2.0 |
-| `9b` | 品質比較 | GGUF Q3_K_M | Qwen3-8B NF4 | FLUX Non-Commercial License v2.1（非商用・非本番） |
+| 選択値 | 用途 | 画像モデル | テキスト側 | 既定step | ライセンス |
+|---|---|---|---|---:|---|
+| `flux3` | 最新世代の生成・編集 | 公式INT8 ConvRot distilled | Qwen3-VL-4B-Instruct（CPU BF16） | 16 | FLUX Kommunity License v1.0 |
 
-既定は4Bです。9Bを選ぶと画面上に非商用・非本番表示が出ます。参照画像は4Bで最大4枚まで各768px、8枚時512px、9Bでは4枚時512px、8枚時384pxへ自動調整します。
+モデルのダウンロードには、ライセンスを確認したことを示す明示オプションが必要です。
+
+### FLUX 3通常版とBaseの違い
+
+このアプリが追加するのは通常版の`black-forest-labs/flux-3-image-klein`です。
+
+| | FLUX 3 Image Klein | FLUX 3 Image Klein Base |
+|---|---|---|
+| チェックポイント | 蒸留済み | 未蒸留 |
+| 推論 | 16 step、CFGなし | 50 step、CFG 3.5 |
+| 主用途 | 生成、編集、セルフホスト | fine-tuning、LoRA、研究 |
+| 公式H200実測（1MP） | 約3秒 | 約12秒 |
+
+Baseは「より高品質な通常利用版」ではなく、追加学習用の元モデルです。通常の画像生成アプリでは蒸留版が適しています。
+
+### FLUX 3のメモリとプロンプト
+
+FLUX 3は、公式Comfy配布のdistilled INT8 ConvRot TransformerをDiffusers ModularPipelineへ直接接続します。約5.43GiBのTransformerをGPUに置き、Qwen3-VLテキストエンコーダーはCPUで実行する段階式Pipelineです。既定のCUDA allocator上限は8GiBで、ComfyUIは使用しません。
+
+公式は短い入力を詳細なscene captionへ展開するprompt upsamplerの利用を強く推奨しています。このアプリは大きな追加モデルであるupsamplerを自動取得・実行しないため、FLUX 3では構図、被写体、背景、照明、質感まで含む詳しいプロンプトを入力してください。
+
+CUDA 13対応環境と`comfy-kitchen`のConvRotカーネルが必要です。
+
+## セットアップ
+
+Python 3.12、NVIDIA CUDA対応GPU、十分なRAMと空きディスクが必要です。`.venv`、`models`、`outputs`、`uploads`はGit管理されません。
+
+### FLUX 3を準備
+
+[通常版の公式配布ページ](https://huggingface.co/black-forest-labs/flux-3-image-klein)と[FLUX Kommunity License](https://huggingface.co/black-forest-labs/flux-3-image-klein/blob/main/LICENSE.md)を読み、Hugging Face上でアクセス条件に同意してから実行します。
+
+```bash
+./setup.sh flux3 --acknowledge-flux3-license
+```
+
+依存ライブラリだけ準備する場合は`./setup.sh none`を使います。
+
+取得後の画像生成はローカルファイルだけで動作します。「LLMで公式形式に強化」を使った場合のみ、プロンプトが`KLEIN_PROMPT_LLM_URL`の設定先へ送信されます。
 
 ## API
 
-入力項目、レスポンス、ジョブ状態、エラーコードを含む完全な仕様は[API仕様書](docs/API.md)を参照してください。起動中はSwagger UI（`/docs`）、ReDoc（`/redoc`）、OpenAPI JSON（`/openapi.json`）も利用できます。
-
-`POST /api/generate` のmultipartフォームに `model=4b` または `model=9b` を指定します。省略時は互換性のため4Bです。
+`POST /api/generate`のmultipartフォームでは`model=flux3`を指定できます。省略時もFLUX 3です。
 
 ```bash
 curl -X POST http://127.0.0.1:7864/api/generate \
-  -F 'model=9b' \
-  -F 'prompt=The same character reading a book by a cafe window.' \
+  -F 'model=flux3' \
+  -F 'prompt=A detailed cinematic scene of a character reading by a cafe window, soft afternoon light...' \
   -F 'image=@/absolute/path/character.png' \
   -F 'width=1024' -F 'height=768' -F 'seed=42'
 ```
@@ -53,79 +81,13 @@ curl -X POST http://127.0.0.1:7864/api/generate \
 - `POST /api/jobs/JOB_ID/cancel`: 停止
 - `POST /api/unload`: 現在のモデルを解放
 
-## 省メモリ構成と実測
-
-CPUオフロード、VAEタイル、4ステップ、guidance 1.0、PyTorch上限7GiBを使用します。大容量GPUを7GiBに制限した検証であり、実際の8GB GPUではドライバー等の使用量によって余裕が小さくなる場合があります。
-
-統合サーバー上のモデル切替テスト:
-
-| 切替 | 512×512生成 | 予約ピーク |
-|---|---:|---:|
-| 起動→4B | 3.92秒 | 3.355GiB |
-| 4B→9B | 5.33秒 | 6.166GiB |
-| 9B→4B | 2.39秒 | 3.355GiB |
-
-読み込み込みの時間は順に23.98秒、25.30秒、8.81秒でした。API入力、両モデル一覧、最大8枚、同時実行拒否、停止、失敗後の復帰を含む6テストが通過しています。
-
-## セットアップ
-
-このPCでは既存の4B・9Bモデルを共有しており、重複コピーしていません。別PCではPython 3.12、NVIDIA CUDA対応GPU、32GB以上のRAM、モデル用に40GB以上の空きディスクを推奨します。`.venv`、`models`、`outputs`、`uploads`はコピーせず、アプリのソースだけを移してください。
-
-### 4Bを準備（既定）
-
-```bash
-./setup.sh
-```
-
-`setup.sh`を実行すると、最初にPython依存ライブラリをインストールし、その直後に4Bをダウンロードします。初回起動時や最初の生成時にモデルを取得する方式ではありません。途中で停止しても、同じコマンドを再実行すればHugging Faceのキャッシュから再開します。
-
-準備が完了してから起動します。
-
-```bash
-./run.sh
-```
-
-### 4Bを明示して準備
-
-まず約11GBの4Bだけを取得して使い始めることもできます。
-
-```bash
-./setup.sh 4b
-./run.sh
-```
-
-### 9Bを追加
-
-9Bは非商用・非本番用途に限定され、出力のフィルタリングまたは表示・配布前のレビューなど追加条件があります。先に[公式配布ページ](https://huggingface.co/black-forest-labs/FLUX.2-klein-9B)と[第三者ライセンスと注意事項](THIRD_PARTY_NOTICES.md)を読み、Hugging Face上でアクセス条件に同意してください。内容を確認した場合に限り、明示オプションを付けて約20GBを取得します。
-
-```bash
-.venv/bin/python download_models.py 9b --acknowledge-9b-license
-```
-
-取得完了後に画面を再読み込みすると9Bを選べるようになります。未取得モデルは選択欄で無効表示されます。依存ライブラリだけ準備し、モデルを後で取得する場合は `./setup.sh none` を使います。個別取得は次の通りです。
-
-```bash
-.venv/bin/python download_models.py 4b
-.venv/bin/python download_models.py 9b --acknowledge-9b-license
-```
-
-両方を一度に準備する場合は、ライセンス確認後に次を実行します。
-
-```bash
-./setup.sh all --acknowledge-9b-license
-```
-
-モデル取得にはインターネット接続が必要です。取得後の生成はローカルファイルのみで動作し、画像・プロンプトは外部APIへ送信しません。
+完全な仕様は[API仕様書](docs/API.md)を参照してください。起動中はSwagger UI（`/docs`）、ReDoc（`/redoc`）、OpenAPI JSON（`/openapi.json`）も利用できます。
 
 ## ライセンス
 
-このリポジトリで作成したアプリケーションコードは[Apache License 2.0](LICENSE)で提供します。モデル重みはリポジトリに含めず、`models/`はGit管理から除外しています。
+このリポジトリで作成したアプリケーションコードは[Apache License 2.0](LICENSE)で提供します。モデル、モデル重み、トークナイザー、依存ライブラリには提供元のライセンスが適用されます。
 
-モデル、モデル重み、トークナイザー、および依存ライブラリには、それぞれの提供元ライセンスが適用されます。このリポジトリのApache-2.0ライセンスは、それら第三者配布物のライセンスを変更しません。特にFLUX.2 klein 9BはFLUX Non-Commercial License v2.1の対象で、非商用・非本番用途に限定されます。
+- [FLUX 3 Image Klein](https://huggingface.co/black-forest-labs/flux-3-image-klein)
+- [FLUX 3 Image Klein Base](https://huggingface.co/black-forest-labs/flux-3-image-klein-base)（比較対象。アプリでは未使用）
 
-各モデルの適用ライセンス、9Bの追加条件、再配布、商標に関する説明は[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)にまとめています。実際の利用ではリンク先の最新の原文が優先されます。
-
-- [FLUX.2 klein 4B](https://huggingface.co/black-forest-labs/FLUX.2-klein-4B)
-- [FLUX.2 klein 9B](https://huggingface.co/black-forest-labs/FLUX.2-klein-9B)
-- [4B GGUF](https://huggingface.co/unsloth/FLUX.2-klein-4B-GGUF)
-- [9B GGUF](https://huggingface.co/unsloth/FLUX.2-klein-9B-GGUF)
+実際の利用ではリンク先の最新の原文が優先されます。

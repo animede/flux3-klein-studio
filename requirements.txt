@@ -1,12 +1,11 @@
-torch==2.9.0
-torchvision==0.24.0
-diffusers==0.37.1
-transformers==5.1.0
-huggingface-hub==1.4.1
+torch==2.14.1
+torchvision==0.29.1
+diffusers @ git+https://github.com/huggingface/diffusers.git@d42ebf9c6e0b46103b74283f5324357a67acaa04
+transformers @ git+https://github.com/huggingface/transformers.git@966f59c897c15db8a5e14882d086beba8d6d0b9f
+huggingface-hub==1.33.0
 tokenizers==0.22.2
-accelerate==1.12.0
-bitsandbytes==0.49.0
-gguf==0.17.1
+accelerate==1.15.0
+comfy-kitchen==0.2.37
 safetensors>=0.5.0
 fastapi==0.115.12
 starlette==0.46.2
