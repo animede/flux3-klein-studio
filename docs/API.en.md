@@ -39,8 +39,8 @@ The request is `multipart/form-data`.
 | `prompt` | Yes | None | 1–4000 characters |
 | `model` | No | `flux3` | `flux3` |
 | `image` | No | None | Repeat the field up to 8 times. Each at most 10 MB and 16 megapixels |
-| `width` | No | `768` | 256–1024, multiple of 32 |
-| `height` | No | `768` | 256–1024, multiple of 32 |
+| `width` | No | `768` | 256–2688, multiple of 32. Width × height at most 2048×2048. Above 1024×1024 the job counts as 2K and the GPU allocation limit becomes 10 GiB |
+| `height` | No | `768` | 256–2688, multiple of 32 |
 | `seed` | No | `-1` | `-1` is random; fixed values are 0–4294967295 |
 | `outpaint` | No | `false` | `true` uses the outpaint LoRA. Requires exactly one reference image (otherwise 422) |
 | `boxes` | No | Empty string | JSON array in 0–1000 coordinates, up to 32 entries. Placement is `{id, bbox, desc}`; editing is `{id, from, src_bbox, tgt_bbox, desc}` (`tgt_bbox: null` deletes). Coordinates are `[top, left, bottom, right]` |
@@ -48,7 +48,7 @@ The request is `multipart/form-data`.
 | `upsample_strict` | No | `false` | `true` stops generation when upsampling is unavailable (by default it generates with the original prompt and adds a `warning`) |
 | `upsampler` | No | `KLEIN_UPSAMPLER` (default `auto`) | LLM to use: `auto`, `remote`, `local`, `pup-int8`, `pup-gguf` (see "Prompt upsampler" below) |
 
-Omitting reference images gives T2I; one or more gives I2I / Ref2I. PNG, JPEG, and WebP are recommended. Reference images are downscaled automatically based on count and model to limit VRAM usage.
+Omitting reference images gives T2I; one or more gives I2I / Ref2I. PNG, JPEG, and WebP are recommended. Each reference image is downscaled to at most 1 MP (the official recommendation), with the total capped at 2 MP (1 MP each for up to two images, 0.25 MP each for eight). BFL's recommended output is 2K (e.g. 2048×2048); outputs up to 1024×1024 run within 8 GiB, and 2K runs with a GPU allocation limit of 10 GiB.
 
 Generation uses 16 steps. FLUX 3 expects a complete scene caption, so by default the prompt is expanded by the prompt upsampler before generation. When sending a caption already expanded with `/api/enhance-prompt` or a full caption you wrote yourself, add `upsample=false` to avoid expanding it twice.
 

@@ -24,6 +24,9 @@ os.environ.setdefault("PYTORCH_ALLOC_CONF", "expandable_segments:True")
 from model_config import MODELS
 
 
+HIRES_THRESHOLD_PIXELS = 1024 * 1024  # above this the high-resolution allocator budget applies
+
+
 def default_shift(model_key):
     """Timestep shift (alpha): KLEIN_TIMESTEP_SHIFT, else the model default (16, BFL's value since 2026-10-17)."""
     try:
@@ -42,6 +45,9 @@ class Engine:
         self.active_model = None
         self.device = os.getenv("KLEIN_DEVICE", "cuda:0")
         self.memory_budget_gib = float(os.getenv("KLEIN_MEMORY_BUDGET_GIB", "8.0"))
+        # Outputs above 1 MP (up to 2K / 4 MP) need more: ~9 GiB for text-to-image, ~10 GiB with references.
+        self.hires_memory_budget_gib = float(os.getenv("KLEIN_HIRES_MEMORY_BUDGET_GIB", "10.0"))
+        self.applied_budget_gib = None
         self.lock = threading.Lock()
 
     def load(self, model_key, progress, outpaint=False):
@@ -62,9 +68,8 @@ class Engine:
         if not self.model_available(config):
             raise RuntimeError(f"{config['name']}が未準備です。download_models.py を実行してください。")
         torch.cuda.set_device(self.device)
-        total = torch.cuda.get_device_properties(self.device).total_memory
-        budget_gib = self.memory_budget_gib
-        torch.cuda.set_per_process_memory_fraction(min(budget_gib * 2**30 / total, 1.0), self.device)
+        if self.applied_budget_gib is None:
+            self.apply_budget(self.memory_budget_gib)
         dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
         progress("loading", 0, f"{config['name']}を読み込んでいます")
         try:
@@ -98,11 +103,29 @@ class Engine:
             if outpaint and (config["int8_dir"] / config["outpaint_lora_file"]).is_file() else None,
         )
 
+    def budget_for(self, width, height):
+        """Allocator budget for an output size: the 8 GiB target up to 1 MP, the high-resolution budget above."""
+        return self.memory_budget_gib if width * height <= HIRES_THRESHOLD_PIXELS else self.hires_memory_budget_gib
+
+    def apply_budget(self, budget_gib):
+        import torch
+
+        total = torch.cuda.get_device_properties(self.device).total_memory
+        if budget_gib * 2**30 > total:
+            raise RuntimeError(
+                f"このGPU({total / 2**30:.1f}GiB)では、この出力サイズに必要なメモリ({budget_gib:.0f}GiB)が足りません。"
+                "1024×1024以下を選んでください。")
+        if self.applied_budget_gib is not None and budget_gib < self.applied_budget_gib:
+            torch.cuda.empty_cache()  # give back what a larger job left in the cache
+        torch.cuda.set_per_process_memory_fraction(min(budget_gib * 2**30 / total, 1.0), self.device)
+        self.applied_budget_gib = budget_gib
+
     def generate(self, model_key, prompt, reference, width, height, seed, progress, cancel, outpaint=False, shift=None):
         import torch
         started = time.monotonic()
         if torch.cuda.is_available():
             torch.cuda.set_device(self.device)
+            self.apply_budget(self.budget_for(width, height))
             torch.cuda.reset_peak_memory_stats(self.device)
         self.load(model_key, progress, outpaint=outpaint)
         if cancel.is_set():
@@ -168,9 +191,7 @@ class Engine:
             "total_seconds": round(time.monotonic() - started, 2),
             "peak_allocated_gib": round(torch.cuda.max_memory_allocated(self.device) / 2**30, 3),
             "peak_reserved_gib": round(torch.cuda.max_memory_reserved(self.device) / 2**30, 3),
-            "allocator_budget_gib": round(
-                self.memory_budget_gib, 3
-            ),
+            "allocator_budget_gib": round(self.applied_budget_gib, 3),
             "gpu": torch.cuda.get_device_name(self.device),
             "steps": config["steps"],
             "transformer_calls": metrics_calls,

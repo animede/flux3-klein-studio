@@ -52,7 +52,8 @@ FLUX 3 Image Klein Reference Studio の HTTP API の全エンドポイント、�
 | `default_model` | string | 既定のモデルの選択値(`"flux3"`) |
 | `models` | object | 選択値 → [`ModelInfo`](#modelinfo) |
 | `busy` | boolean | 生成中か |
-| `memory_budget_gib` | number | PyTorch の GPU 割り当て上限(GiB) |
+| `memory_budget_gib` | number | PyTorch の GPU 割り当て上限(GiB)。1024×1024 以下の出力 |
+| `hires_memory_budget_gib` | number | 1024×1024 を超える出力(2K)のときの割り当て上限(GiB) |
 | `default_upsampler` | string | 既定の upsampler(`KLEIN_UPSAMPLER`、既定 `auto`) |
 | `upsamplers` | object | upsampler の名前 → `{"available": boolean, "detail": string}`。使えるか、使えない理由や必要な空き VRAM |
 
@@ -195,8 +196,8 @@ curl -X POST http://127.0.0.1:7864/api/enhance-prompt \
 |---|---|---|---|---|
 | `prompt` | string | はい | | 前後の空白を除いて 1〜4000 文字。既定では prompt upsampler が展開するので短い依頼でよい。`upsample=false` のときは完全なシーンのキャプションを渡す |
 | `image` | file(複数可) | いいえ | | 参照画像。同名フィールドを最大 8 回。1 枚 10MB・1600 万画素以内。PNG / JPEG / WebP など |
-| `width` | integer | いいえ | `768` | 256〜1024、32 の倍数 |
-| `height` | integer | いいえ | `768` | 256〜1024、32 の倍数 |
+| `width` | integer | いいえ | `768` | 256〜2688、32 の倍数。幅×高さは 2048×2048(4,194,304 画素)以下。1024×1024 を超えると 2K 扱いで、割り当て上限が `KLEIN_HIRES_MEMORY_BUDGET_GIB`(既定 10GiB)になる。GPU の容量が足りなければジョブは `error` |
+| `height` | integer | いいえ | `768` | 256〜2688、32 の倍数 |
 | `seed` | integer | いいえ | `-1` | `-1` はランダム。固定する場合は 0〜4294967295 |
 | `model` | string | いいえ | `flux3` | `flux3`(大文字小文字は区別しない) |
 | `outpaint` | boolean | いいえ | `false` | `true` でアウトペイント LoRA を使う。参照画像はちょうど 1 枚 |
@@ -212,7 +213,7 @@ boolean は `true` / `false`(`1` / `0`、`yes` / `no`、`on` / `off` も可)で�
 
 - 参照画像なしなら T2I、1 枚なら編集、2 枚以上なら複数参照の合成です。
 - 透過部分は白で埋め、EXIF の向きを反映します。
-- VRAM を抑えるため、長辺を `reference_max_side` 以内に縮小します。値は 1 枚なら 768px で、枚数が増えると合計の画素数(768² × 8)に収まるよう小さくなります(最小 256px、32 の倍数)。
+- 1 枚あたり最大 1MP(BFL の推論コードと同じ)に、縦横比を保って縮小します。ただし参照画像の合計は 2MP(`KLEIN_REFERENCE_TOTAL_MP`)までに抑えるので、1〜2 枚なら各 1MP、4 枚なら各 0.5MP、8 枚なら各 0.25MP です(1 枚あたりの上限は `reference_max_pixels`)。8 枚を 1MP ずつにすると 8GiB に収まらないための制限です。
 - アウトペイントでは、参照画像を出力サイズに収まるよう縮小して中央に置き、周りを描き足します。中央部分は元の画像のまま残ります。
 
 **プロンプトの組み立て順**: `upsample` で展開 → `boxes` を末尾に付加 → 生成。
@@ -405,7 +406,8 @@ URL はベース URL からの相対パスです。ファイルは自動では�
 | `references` | string[] | 保存した参照画像のパス(`uploads/{job_id}_ref_{n}.png`) |
 | `reference` | string \| null | 1 枚目の参照画像(旧 API 互換) |
 | `reference_count` | integer | 参照画像の枚数 |
-| `reference_max_side` | integer \| null | 参照画像の長辺の上限 |
+| `reference_max_side` | integer \| null | 参照画像 1 枚あたりの画素数の上限を正方形の一辺に換算した値(目安) |
+| `reference_max_pixels` | integer \| null | 参照画像 1 枚あたりの画素数の上限 |
 | `model` / `model_name` / `model_repo` | string | モデル |
 | `base_revision` / `int8_revision` | string | 使ったモデルファイルのリビジョン |
 | `transformer_quantization` / `text_quantization` | string | 量子化(`Official INT8 ConvRot` / `BF16 (CPU memory, GPU sequential offload)`) |
@@ -429,7 +431,8 @@ URL はベース URL からの相対パスです。ファイルは自動では�
 | `message` | string | 状態の説明。`error` のときは失敗の理由(最大 1000 文字) |
 | `created_at` | number | 作成時刻(UNIX 秒) |
 | `reference_count` | integer | 参照画像の枚数 |
-| `reference_max_side` | integer \| null | 参照画像の長辺の上限。参照なしなら `null` |
+| `reference_max_side` | integer \| null | 参照画像 1 枚あたりの画素数の上限を正方形の一辺に換算した値(目安)。参照なしなら `null` |
+| `reference_max_pixels` | integer \| null | 参照画像 1 枚あたりの画素数の上限。参照なしなら `null` |
 | `metrics` | object \| null | 完了時の計測値([`metrics`](#metrics)) |
 | `image_url` | string \| null | 完了時の PNG の URL |
 | `metadata_url` | string \| null | 完了時のメタデータ JSON の URL |
@@ -472,7 +475,7 @@ URL はベース URL からの相対パスです。ファイルは自動では�
 ### エラーの形
 
 ```json
-{"detail": "幅・高さは256〜1024の32の倍数で指定してください。"}
+{"detail": "幅・高さは256〜2688の32の倍数で、合計4,194,304画素(2048×2048)以下で指定してください。"}
 ```
 
 FastAPI 自身の型検証(必須フィールドの欠落、整数でない値など)で失敗した場合は `422` で、`detail` が配列になります。
@@ -494,7 +497,9 @@ FastAPI 自身の型検証(必須フィールドの欠落、整数でない値�
 | `KLEIN_HOST` | `127.0.0.1` | 待ち受けるアドレス(`run.sh`) |
 | `KLEIN_PORT` | `7864` | ポート(`run.sh`) |
 | `KLEIN_DEVICE` | `cuda:0` | 使う GPU |
-| `KLEIN_MEMORY_BUDGET_GIB` | `8.0` | PyTorch の GPU 割り当て上限(GiB) |
+| `KLEIN_MEMORY_BUDGET_GIB` | `8.0` | PyTorch の GPU 割り当て上限(GiB)。1024×1024 以下の出力 |
+| `KLEIN_HIRES_MEMORY_BUDGET_GIB` | `10.0` | 1024×1024 を超える出力(2K)の割り当て上限。4MP の T2I は約 9GiB、参照画像付きは約 10GiB 必要 |
+| `KLEIN_REFERENCE_TOTAL_MP` | `2` | 参照画像の合計画素数の上限(MP)。1 枚あたりは最大 1MP |
 | `KLEIN_TIMESTEP_SHIFT` | `16` | タイムステップのシフト(alpha)の既定値。BFL は 2026-10-17 に 6.93 から 16 に変更 |
 | `KLEIN_TEXT_ENCODER` | `gpu-offload` | テキストエンコーダーの計算場所。`gpu-offload`(CPU メモリに置き GPU で 1 層ずつ計算、約 2.5 秒)/ `cpu`(約 30 秒) |
 
@@ -548,7 +553,8 @@ FastAPI 自身の型検証(必須フィールドの欠落、整数でない値�
 | 同時に実行できる生成 | 1 件 |
 | プロンプト | 1〜4000 文字 |
 | 参照画像 | 8 枚まで、1 枚 10MB・1600 万画素以内 |
-| 出力サイズ | 256〜1024px、32 の倍数 |
+| 出力サイズ | 各辺 256〜2688px・32 の倍数、合計 2048×2048 以下。1024×1024 超は割り当て上限 10GiB |
+| 参照画像の大きさ | 1 枚あたり最大 1MP、合計 2MP まで |
 | ステップ数 | 16(固定) |
 | `boxes` | 32 件まで |
 | メモリに保持するジョブ | 直近 100 件(再起動で消える) |

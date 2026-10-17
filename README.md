@@ -50,7 +50,7 @@ Baseは「より高品質な通常利用版」ではなく、追加学習用の�
 
 FLUX 3は、公式Comfy配布のdistilled INT8 ConvRot TransformerをDiffusers ModularPipelineへ直接接続します。約5.43GiBのTransformerをGPUに置く段階式Pipelineです。Qwen3-VLテキストエンコーダー(約8GB)はCPUメモリに置き、GPUで1層ずつ計算します(逐次オフロード、VRAMの追加は約1GiB)。upsamplerの長いキャプションでも、エンコードは約2.5秒です(CPUで計算すると約30秒。`KLEIN_TEXT_ENCODER=cpu`でCPU計算に戻せます)。2048pxなど1024pxを超える出力では、VAEをタイル分割します。既定のCUDA allocator上限は8GiBで、ComfyUIは使用しません。
 
-実測(RTX PRO 4000 24GB、INT8、16ステップ、upsamplerのキャプション): T2I 1024×1024 約12秒、参照1枚の編集 768×1024 約18秒、参照2枚 約30秒(いずれもピーク約7.8GiB)。2K(2048×2048)は約51秒・ピーク約8.9GiB(上限9GiB以上が必要)。
+実測(RTX PRO 4000 24GB、INT8、16ステップ、upsamplerのキャプション): T2I 1024×1024 約12秒、参照1枚の編集 768×1024 約18秒、参照2枚 約30秒(いずれもピーク約7.8GiB)。BFLが推奨する2K(2048×2048、2304×1728など)も選べます。1024×1024を超える出力では割り当て上限を自動で10GiB(`KLEIN_HIRES_MEMORY_BUDGET_GIB`)に上げます(T2I 2048×2048 約50秒・ピーク約8.2GiB。12GB級のGPUなら2Kも使えます)。参照画像は1枚あたり最大1MP、合計2MPまで(8枚なら各0.25MP)に縮小します。
 
 公式はprompt upsamplerの使用を必須としています(短い入力は平凡な出力になり、1行の編集指示は構図まで変えてしまう)。このアプリは、BFLが外部のLLM向けに公開しているシステムプロンプト(`pup_prompts_external_vlm.json`、t2i / i2i / t2i_bbox / i2i_bbox)で、手元のLLMを動かします。GPUに余裕があれば、公式のupsampler(量子化版)も使えます(下の「公式のupsamplerを使う」)。**prompt upsamplerは標準で有効**で、生成のたびに入力文を完全なキャプションへ展開してから生成します。
 比較のために使わずに生成する(バイパス)こともできます。画面では「prompt upsamplerを使う」のチェックを外し、APIでは`upsample=false`を指定します。
@@ -142,7 +142,8 @@ curl http://127.0.0.1:7864/api/health
 | `CUDA_VISIBLE_DEVICES` | | 使うGPUの番号 |
 | `KLEIN_HOST` | `127.0.0.1` | 待ち受けるアドレス |
 | `KLEIN_PORT` | `7864` | ポート |
-| `KLEIN_MEMORY_BUDGET_GIB` | `8.0` | PyTorchのGPU割り当て上限(GiB) |
+| `KLEIN_MEMORY_BUDGET_GIB` | `8.0` | PyTorchのGPU割り当て上限(GiB)。1024×1024以下の出力 |
+| `KLEIN_HIRES_MEMORY_BUDGET_GIB` | `10.0` | 2K(1024×1024超)の出力の割り当て上限(GiB) |
 | `KLEIN_PROMPT_LLM_URLS` | | prompt upsamplerに使うLLMサーバ(OpenAI互換、カンマ区切り) |
 | `KLEIN_UPSAMPLER` | `auto` | 既定のupsampler(`auto` / `remote` / `local` / `pup-int8` / `pup-gguf`) |
 

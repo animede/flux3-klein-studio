@@ -50,7 +50,7 @@ Base is not a "higher-quality version for everyday use"; it is the base model fo
 
 The official distilled INT8 ConvRot Transformer from the Comfy distribution is connected directly to the Diffusers ModularPipeline. The pipeline runs in stages: the ~5.43 GiB Transformer stays on the GPU. The Qwen3-VL text encoder (~8 GB) stays in CPU memory and is computed on the GPU one layer at a time (sequential offload, about 1 GiB of extra VRAM): about 2.5 s per prompt even for the long captions of the upsampler, against about 30 s on the CPU (`KLEIN_TEXT_ENCODER=cpu` keeps it on the CPU). Above 1024 px (e.g. 2048 px) the VAE is tiled. The default CUDA allocator limit is 8 GiB. ComfyUI is not used.
 
-Measured (RTX PRO 4000 24GB, INT8, 16 steps, upsampler captions): text-to-image 1024×1024 about 12 s, one-reference edit 768×1024 about 18 s, two references about 30 s (all peaking at about 7.8 GiB). 2K (2048×2048) takes about 51 s with a peak of about 8.9 GiB (needs an allocator limit of 9 GiB or more).
+Measured (RTX PRO 4000 24GB, INT8, 16 steps, upsampler captions): text-to-image 1024×1024 about 12 s, one-reference edit 768×1024 about 18 s, two references about 30 s (all peaking at about 7.8 GiB). The 2K sizes BFL recommends (2048×2048, 2304×1728, etc.) are also available. Above 1024×1024 the allocator limit is raised automatically to 10 GiB (`KLEIN_HIRES_MEMORY_BUDGET_GIB`) (T2I 2048×2048 takes about 50 s with a peak of about 8.2 GiB, so 2K also works on 12 GB-class GPUs). Reference images are downscaled to at most 1 MP each and 2 MP in total (0.25 MP each for 8 images).
 
 The model card requires a prompt upsampler (short prompts give generic output, and a one-line edit instruction can change the whole composition). This app runs a local LLM with the system prompts BFL publishes for external LLMs (`pup_prompts_external_vlm.json`, t2i / i2i / t2i_bbox / i2i_bbox). If you have GPU headroom, you can also use the official upsampler (quantized) (see "Using the official upsampler" below). **The prompt upsampler is on by default**: every generation first expands the input into a full caption.
 For comparison, you can generate without it (bypass): uncheck "prompt upsamplerを使う" (use the prompt upsampler) in the GUI, or send `upsample=false` to the API.
@@ -142,7 +142,8 @@ Main environment variables at startup:
 | `CUDA_VISIBLE_DEVICES` | | GPU to use |
 | `KLEIN_HOST` | `127.0.0.1` | Address to listen on |
 | `KLEIN_PORT` | `7864` | Port |
-| `KLEIN_MEMORY_BUDGET_GIB` | `8.0` | PyTorch GPU allocation limit (GiB) |
+| `KLEIN_MEMORY_BUDGET_GIB` | `8.0` | PyTorch GPU allocation limit (GiB) for outputs up to 1024×1024 |
+| `KLEIN_HIRES_MEMORY_BUDGET_GIB` | `10.0` | Allocation limit (GiB) for 2K outputs (above 1024×1024) |
 | `KLEIN_PROMPT_LLM_URLS` | | LLM servers for the prompt upsampler (OpenAI-compatible, comma-separated) |
 | `KLEIN_UPSAMPLER` | `auto` | Default upsampler (`auto` / `remote` / `local` / `pup-int8` / `pup-gguf`) |
 

@@ -39,8 +39,8 @@ FLUX 3 Image Klein Reference Studio（DiffusersサーバとGUIアプリ）は、
 | `prompt` | はい | なし | 1〜4000文字 |
 | `model` | いいえ | `flux3` | `flux3` |
 | `image` | いいえ | なし | 同名フィールドを最大8回指定。各10MB・1600万画素以内 |
-| `width` | いいえ | `768` | 256〜1024、32の倍数 |
-| `height` | いいえ | `768` | 256〜1024、32の倍数 |
+| `width` | いいえ | `768` | 256〜2688、32の倍数。幅×高さは2048×2048以下。1024×1024を超えると2K扱いで、GPUの割り当て上限が10GiBになる |
+| `height` | いいえ | `768` | 256〜2688、32の倍数 |
 | `seed` | いいえ | `-1` | `-1`はランダム、固定値は0〜4294967295 |
 | `outpaint` | いいえ | `false` | `true`でアウトペイントLoRAを使用。参照画像はちょうど1枚(それ以外は422) |
 | `boxes` | いいえ | 空文字 | 0〜1000座標のJSON配列、最大32件。配置は`{id, bbox, desc}`、編集は`{id, from, src_bbox, tgt_bbox, desc}`(`tgt_bbox: null`で削除)。座標は`[top, left, bottom, right]` |
@@ -48,7 +48,7 @@ FLUX 3 Image Klein Reference Studio（DiffusersサーバとGUIアプリ）は、
 | `upsample_strict` | いいえ | `false` | `true`ならupsampleが使えないときに生成を止める(既定は元のプロンプトで生成し`warning`を付ける) |
 | `upsampler` | いいえ | `KLEIN_UPSAMPLER`(既定`auto`) | 使うLLM。`auto`、`remote`、`local`、`pup-int8`、`pup-gguf`(下の「prompt upsampler」) |
 
-参照画像を省略するとT2I、1枚以上指定するとI2I / Ref2Iになります。PNG、JPEG、WebPを推奨します。参照画像はVRAM使用量を抑えるため、枚数とモデルに応じて自動縮小されます。
+参照画像を省略するとT2I、1枚以上指定するとI2I / Ref2Iになります。PNG、JPEG、WebPを推奨します。参照画像は1枚あたり最大1MP(公式の推奨)に縮小し、合計は2MPまでに抑えます(2枚までは各1MP、8枚なら各0.25MP)。BFLの推奨出力は2K(2048×2048など)で、1024×1024以下は8GiB、2KはGPUの割り当て上限10GiBで動きます。
 
 生成は16 stepです。FLUX 3は完全なscene captionを前提にしているため、既定ではprompt upsamplerで展開してから生成します。`/api/enhance-prompt`で展開済みのキャプションや、自分で書いた完全なキャプションを送る場合は、二重に展開しないよう`upsample=false`を付けてください。
 

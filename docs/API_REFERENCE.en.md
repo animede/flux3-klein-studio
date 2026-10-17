@@ -52,7 +52,8 @@ Returns the server status, the loaded model, and whether model files are ready.
 | `default_model` | string | Selection value of the default model (`"flux3"`) |
 | `models` | object | Selection value → [`ModelInfo`](#modelinfo) |
 | `busy` | boolean | Whether a generation is in progress |
-| `memory_budget_gib` | number | PyTorch GPU allocation limit (GiB) |
+| `memory_budget_gib` | number | PyTorch GPU allocation limit (GiB) for outputs up to 1024×1024 |
+| `hires_memory_budget_gib` | number | Allocation limit (GiB) for outputs above 1024×1024 (2K) |
 | `default_upsampler` | string | Default upsampler (`KLEIN_UPSAMPLER`, default `auto`) |
 | `upsamplers` | object | Upsampler name → `{"available": boolean, "detail": string}`: whether it is usable, or why not and how much free VRAM it needs |
 
@@ -195,8 +196,8 @@ Creates an image generation job and returns `202` immediately. Generation runs i
 |---|---|---|---|---|
 | `prompt` | string | Yes | | 1–4000 characters after trimming whitespace. By default the prompt upsampler expands it, so a short request is fine. With `upsample=false`, pass a full scene caption |
 | `image` | file (repeatable) | No | | Reference images. Repeat the field up to 8 times. Each up to 10MB and 16 megapixels. PNG / JPEG / WebP, etc. |
-| `width` | integer | No | `768` | 256–1024, multiple of 32 |
-| `height` | integer | No | `768` | 256–1024, multiple of 32 |
+| `width` | integer | No | `768` | 256–2688, multiple of 32. Width × height at most 2048×2048 (4,194,304 pixels). Above 1024×1024 the job counts as 2K and the allocation limit becomes `KLEIN_HIRES_MEMORY_BUDGET_GIB` (default 10 GiB). If the GPU lacks the memory, the job ends in `error` |
+| `height` | integer | No | `768` | 256–2688, multiple of 32 |
 | `seed` | integer | No | `-1` | `-1` is random. To fix it, 0–4294967295 |
 | `model` | string | No | `flux3` | `flux3` (case-insensitive) |
 | `outpaint` | boolean | No | `false` | `true` uses the outpainting LoRA. Requires exactly 1 reference image |
@@ -212,7 +213,7 @@ Send booleans as `true` / `false` (`1` / `0`, `yes` / `no`, `on` / `off` are als
 
 - No reference image means T2I, one means editing, and two or more means multi-reference composition.
 - Transparent areas are filled with white and EXIF orientation is applied.
-- To limit VRAM, images are downscaled to at most `reference_max_side` on the long side. This is 768px for one image and shrinks as more are added so the total pixel count fits within 768² × 8 (minimum 256px, multiple of 32).
+- Each image is downscaled, keeping its aspect ratio, to at most 1 MP (as in BFL's inference code). The total for all reference images is capped at 2 MP (`KLEIN_REFERENCE_TOTAL_MP`), so one or two images get 1 MP each, four get 0.5 MP each, and eight get 0.25 MP each (the per-image limit is `reference_max_pixels`). The cap exists because eight images at 1 MP each would not fit in 8 GiB.
 - For outpainting, the reference image is downscaled to fit the output size, centered, and the surroundings are filled in. The center stays as the original image.
 
 **Prompt assembly order**: expand with `upsample` → append `boxes` → generate.
@@ -405,7 +406,8 @@ URLs are relative to the base URL. Files are not deleted automatically.
 | `references` | string[] | Paths of saved reference images (`uploads/{job_id}_ref_{n}.png`) |
 | `reference` | string \| null | First reference image (legacy API compatibility) |
 | `reference_count` | integer | Number of reference images |
-| `reference_max_side` | integer \| null | Long-side limit for reference images |
+| `reference_max_side` | integer \| null | Per-image pixel limit for reference images, expressed as the side of an equivalent square (approximate) |
+| `reference_max_pixels` | integer \| null | Per-image pixel limit for reference images |
 | `model` / `model_name` / `model_repo` | string | Model |
 | `base_revision` / `int8_revision` | string | Revisions of the model files used |
 | `transformer_quantization` / `text_quantization` | string | Quantization (`Official INT8 ConvRot` / `BF16 (CPU memory, GPU sequential offload)`) |
@@ -429,7 +431,8 @@ URLs are relative to the base URL. Files are not deleted automatically.
 | `message` | string | Status description. For `error`, the failure reason (up to 1000 characters) |
 | `created_at` | number | Creation time (UNIX seconds) |
 | `reference_count` | integer | Number of reference images |
-| `reference_max_side` | integer \| null | Long-side limit for reference images. `null` if there are none |
+| `reference_max_side` | integer \| null | Per-image pixel limit for reference images, expressed as the side of an equivalent square (approximate). `null` if there are none |
+| `reference_max_pixels` | integer \| null | Per-image pixel limit for reference images. `null` if there are none |
 | `metrics` | object \| null | Measurements on completion ([`metrics`](#metrics)) |
 | `image_url` | string \| null | PNG URL on completion |
 | `metadata_url` | string \| null | Metadata JSON URL on completion |
@@ -474,7 +477,7 @@ URLs are relative to the base URL. Files are not deleted automatically.
 Error messages are in Japanese.
 
 ```json
-{"detail": "幅・高さは256〜1024の32の倍数で指定してください。"}
+{"detail": "幅・高さは256〜2688の32の倍数で、合計4,194,304画素(2048×2048)以下で指定してください。"}
 ```
 
 When FastAPI's own type validation fails (missing required fields, non-integer values, etc.), the response is `422` and `detail` is an array.
@@ -496,7 +499,9 @@ Read at server startup (also when started via `run.sh`).
 | `KLEIN_HOST` | `127.0.0.1` | Listen address (`run.sh`) |
 | `KLEIN_PORT` | `7864` | Port (`run.sh`) |
 | `KLEIN_DEVICE` | `cuda:0` | GPU to use |
-| `KLEIN_MEMORY_BUDGET_GIB` | `8.0` | PyTorch GPU allocation limit (GiB) |
+| `KLEIN_MEMORY_BUDGET_GIB` | `8.0` | PyTorch GPU allocation limit (GiB) for outputs up to 1024×1024 |
+| `KLEIN_HIRES_MEMORY_BUDGET_GIB` | `10.0` | Allocation limit for outputs above 1024×1024 (2K). 4 MP T2I needs about 9 GiB; with reference images, about 10 GiB |
+| `KLEIN_REFERENCE_TOTAL_MP` | `2` | Limit on the total pixel count of reference images (MP). Each image is at most 1 MP |
 | `KLEIN_TIMESTEP_SHIFT` | `16` | Default timestep shift (alpha). BFL changed it from 6.93 to 16 on 2026-10-17 |
 | `KLEIN_TEXT_ENCODER` | `gpu-offload` | Where the text encoder runs: `gpu-offload` (kept in CPU memory, computed on the GPU one layer at a time, ~2.5 s) / `cpu` (~30 s) |
 
@@ -550,7 +555,8 @@ They share `KLEIN_LOCAL_LLM_START_TIMEOUT_S` for the startup timeout and `KLEIN_
 | Concurrent generations | 1 |
 | Prompt | 1–4000 characters |
 | Reference images | Up to 8, each up to 10MB and 16 megapixels |
-| Output size | 256–1024px, multiple of 32 |
+| Output size | 256–2688px per side, multiple of 32, at most 2048×2048 in total. Above 1024×1024 the allocation limit is 10 GiB |
+| Reference image size | Up to 1 MP each, 2 MP in total |
 | Steps | 16 (fixed) |
 | `boxes` | Up to 32 items |
 | Jobs kept in memory | Latest 100 (cleared on restart) |

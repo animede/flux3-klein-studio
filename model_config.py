@@ -39,7 +39,9 @@ MODELS = {
         # Timestep shift (alpha): BFL changed the default from 6.93 to 16 on 2026-10-17
         # (reference code black-forest-labs/flux-3-image-klein 62e90b92 and the ComfyUI workflows).
         "shift": 16.0,
-        "reference_pixel_budget": 8 * 768**2,
+        # References: up to 1 MP each (BFL's reference code), 2 MP in total so 8 references still fit 8 GiB.
+        "reference_max_pixels": 1024 * 1024,
+        "reference_total_pixels": 2 * 1024 * 1024,
         "download_patterns": [
             "modular_model_index.json",
             "transformer/config.json",

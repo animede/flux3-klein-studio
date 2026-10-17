@@ -64,7 +64,7 @@ def test_bad_inputs(client):
 def test_reference_and_result(client, monkeypatch):
     def generate(model, prompt, ref, width, height, seed, progress, cancel, **kwargs):
         assert model == 'flux3'
-        assert ref.mode == 'RGB' and ref.size == (768, 384)
+        assert ref.mode == 'RGB' and ref.size == (1024, 512)  # 0.5 MP: under the 1 MP per-reference limit
         assert ref.getpixel((0, 0)) == (255, 255, 255)
         assert seed == 12
         return Image.new('RGB', (width, height)), {'seconds': 1}
@@ -82,17 +82,17 @@ def test_eight_references_adaptive_size_and_limit(client, monkeypatch):
         assert model == 'flux3'
         assert isinstance(refs, list) and len(refs) == 8
         assert all(ref.mode == 'RGB' for ref in refs)
-        assert all(ref.size == (768, 384) for ref in refs)
+        assert all(ref.size == (724, 362) for ref in refs)  # 2 MP shared by 8 -> 0.25 MP each
         return Image.new('RGB', (width, height)), {'seconds': 1}
     monkeypatch.setattr(service.engine, 'generate', generate)
     files = [('image', (f'ref-{index}.png', png_bytes((index, 0, 0, 255)), 'image/png')) for index in range(8)]
     response = client.post('/api/generate', data={'prompt': 'combine eight'}, files=files)
     state = wait_job(client, response.json()['id'])
     assert state['status'] == 'done' and state['reference_count'] == 8
-    assert state['reference_max_side'] == 768
+    assert state['reference_max_pixels'] == 2 * 1024 * 1024 // 8 and state['reference_max_side'] == 512
     metadata = (service.OUTPUTS / (state['id'] + '.json')).read_text()
     assert '"reference_count": 8' in metadata
-    assert '"reference_max_side": 768' in metadata
+    assert '"reference_max_pixels": 262144' in metadata
     assert all((service.UPLOADS / f"{state['id']}_ref_{index}.png").exists() for index in range(1, 9))
 
     nine_files = [('image', (f'ref-{index}.png', png_bytes(), 'image/png')) for index in range(9)]
@@ -310,3 +310,31 @@ def test_default_shift_follows_bfl_and_the_env(monkeypatch):
     assert engine.default_shift('flux3') == 16.0
     monkeypatch.setenv('KLEIN_TIMESTEP_SHIFT', '6.93')
     assert engine.default_shift('flux3') == 6.93
+
+
+def test_2k_output_is_accepted_and_larger_is_rejected(client, monkeypatch):
+    seen = {}
+
+    def generate(model, prompt, ref, width, height, seed, progress, cancel, **kwargs):
+        seen['size'] = (width, height)
+        return Image.new('RGB', (8, 8)), {'seconds': 1}
+    monkeypatch.setattr(service.engine, 'generate', generate)
+    for w, h in ((2048, 2048), (2304, 1728), (1728, 2304)):
+        state = wait_job(client, client.post('/api/generate', data={'prompt': 'x', 'upsample': 'false', 'width': w, 'height': h}).json()['id'])
+        assert state['status'] == 'done' and seen['size'] == (w, h)
+    for w, h in ((2688, 2048), (2720, 1024), (2048, 2080)):
+        assert client.post('/api/generate', data={'prompt': 'x', 'width': w, 'height': h}).status_code == 422
+
+
+def test_reference_budget_follows_the_env(monkeypatch):
+    monkeypatch.delenv('KLEIN_REFERENCE_TOTAL_MP', raising=False)
+    assert service.reference_max_pixels(1) == 1024 * 1024 and service.reference_max_pixels(4) == 512 * 1024
+    monkeypatch.setenv('KLEIN_REFERENCE_TOTAL_MP', '4')
+    assert service.reference_max_pixels(2) == 1024 * 1024 and service.reference_max_pixels(8) == 512 * 1024
+
+
+def test_engine_picks_the_hires_budget_above_1mp():
+    import engine
+    e = engine.Engine()
+    assert e.budget_for(1024, 1024) == e.memory_budget_gib
+    assert e.budget_for(2048, 2048) == e.hires_memory_budget_gib

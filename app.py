@@ -16,6 +16,7 @@ import io
 import json
 import logging
 import math
+import os
 import re
 import secrets
 import threading
@@ -42,7 +43,8 @@ OUTPUTS.mkdir(exist_ok=True)
 UPLOADS.mkdir(exist_ok=True)
 MAX_UPLOAD = 10 * 1024 * 1024
 MAX_REFERENCES = 8
-REFERENCE_MAX_SIDE = 768
+MAX_OUTPUT_PIXELS = 2048 * 2048  # 2K / 4 MP, BFL's recommended size
+MAX_OUTPUT_SIDE = 2688
 
 app = FastAPI(title="FLUX 3 Image Klein Reference Studio（DiffusersサーバとGUIアプリ）", version="0.3.0", description="FLUX 3 Image KleinをDiffusersで動かし、8GBのVRAMに収めた画像生成・編集サーバーです。")
 @app.middleware("http")
@@ -85,6 +87,7 @@ class HealthResponse(BaseModel):
     models: dict[str, ModelInfo]
     busy: bool
     memory_budget_gib: float
+    hires_memory_budget_gib: float
     default_upsampler: str
     upsamplers: dict[str, dict[str, Any]]
 
@@ -107,6 +110,7 @@ class JobResponse(BaseModel):
     created_at: float
     reference_count: int
     reference_max_side: int | None
+    reference_max_pixels: int | None = None
     metrics: dict[str, Any] | None = None
     image_url: str | None = None
     metadata_url: str | None = None
@@ -164,6 +168,7 @@ def health():
             for key, item in MODELS.items()
         },
         "busy": engine.lock.locked(), "memory_budget_gib": engine.memory_budget_gib,
+        "hires_memory_budget_gib": engine.hires_memory_budget_gib,
         "default_upsampler": upsampler.default_backend(), "upsamplers": upsampler.backends(),
     }
 
@@ -274,14 +279,19 @@ def delete_gallery_item(image_id: str):
     return {"id": image_id, "deleted": removed}
 
 
-def reference_max_side(count: int, model_key: str = DEFAULT_MODEL) -> int:
-    if count <= 0:
-        return REFERENCE_MAX_SIDE
-    bounded = min(REFERENCE_MAX_SIDE, math.sqrt(MODELS[model_key]["reference_pixel_budget"] / count))
-    return max(256, int(bounded) // 32 * 32)
+def reference_max_pixels(count: int, model_key: str = DEFAULT_MODEL) -> int:
+    """Pixel budget per reference: up to 1 MP each, KLEIN_REFERENCE_TOTAL_MP (default 2) shared by all."""
+    config = MODELS[model_key]
+    try:
+        total = float(os.getenv("KLEIN_REFERENCE_TOTAL_MP", "")) * 1024 * 1024
+    except ValueError:
+        total = config["reference_total_pixels"]
+    if total <= 0:
+        total = config["reference_total_pixels"]
+    return int(min(config["reference_max_pixels"], total / max(count, 1)))
 
 
-def decode_reference(data: bytes, max_side: int = REFERENCE_MAX_SIDE):
+def decode_reference(data: bytes, max_pixels: int = 1024 * 1024):
     try:
         with Image.open(io.BytesIO(data)) as im:
             if im.width * im.height > 16_000_000:
@@ -294,8 +304,11 @@ def decode_reference(data: bytes, max_side: int = REFERENCE_MAX_SIDE):
                 result = canvas.convert("RGB")
             else:
                 result = im.convert("RGB")
-            # Bound reference tokens separately from the output resolution.
-            result.thumbnail((max_side, max_side), Image.Resampling.LANCZOS)
+            # Bound reference tokens separately from the output resolution (by area, keeping the aspect).
+            if result.width * result.height > max_pixels:
+                scale = math.sqrt(max_pixels / (result.width * result.height))
+                result = result.resize((max(16, int(result.width * scale)), max(16, int(result.height * scale))),
+                                       Image.Resampling.LANCZOS)
             return result.copy()
     except (UnidentifiedImageError, OSError, Image.DecompressionBombError) as exc:
         raise ValueError("画像を読み込めません。PNG、JPEG、WebPなどの画像を選んでください。") from exc
@@ -310,7 +323,7 @@ def release_vram_if_idle():
             engine.lock.release()
 
 
-def run_job(job_id, model_key, prompt, references, reference_side, width, height, seed, outpaint=False,
+def run_job(job_id, model_key, prompt, references, reference_pixels, width, height, seed, outpaint=False,
             box_rows=None, upsample=False, upsample_strict=False, upsampler_backend=None, shift=None):
     def progress(status, step, message):
         with jobs_lock:
@@ -365,7 +378,8 @@ def run_job(job_id, model_key, prompt, references, reference_side, width, height
             "reference": reference_paths[0] if reference_paths else None,
             "references": reference_paths,
             "reference_count": len(reference_paths),
-            "reference_max_side": reference_side if reference_paths else None,
+            "reference_max_side": int(math.sqrt(reference_pixels)) if reference_paths else None,
+            "reference_max_pixels": reference_pixels if reference_paths else None,
             "model": model_key,
             "model_name": MODELS[model_key]["name"],
             "model_repo": MODELS[model_key]["base_repo"],
@@ -421,7 +435,7 @@ async def enhance_prompt(
             raise HTTPException(413, "参照画像は1枚につき10MB以内にしてください。")
         try:
             # Decode here so a non-image upload is a 422, not an error inside the LLM call.
-            images.append(decode_reference(data, max_side=1024))
+            images.append(decode_reference(data, max_pixels=MAX_OUTPUT_PIXELS))
         except ValueError as exc:
             raise HTTPException(422, str(exc)) from exc
     try:
@@ -481,8 +495,8 @@ def append_boxes(prompt: str, rows: list) -> str:
 async def generate(
     prompt: str = Form(..., description="生成内容。1〜4000文字。"),
     image: list[UploadFile] | None = File(None, description="参照画像。imageフィールドを最大8回指定可能。"),
-    width: int = Form(768, description="出力幅。256〜1024の32の倍数。"),
-    height: int = Form(768, description="出力高さ。256〜1024の32の倍数。"),
+    width: int = Form(768, description="出力幅。256〜2688の32の倍数(幅×高さは2048×2048以下)。1024×1024を超えると2K扱いでGPUを約10GiB使う。"),
+    height: int = Form(768, description="出力高さ。256〜2688の32の倍数。"),
     seed: int = Form(-1, description="-1でランダム、または0〜4294967295。"),
     model: str = Form(DEFAULT_MODEL, description="flux3。"),
     outpaint: bool = Form(False, description="FLUX 3のアウトペイントLoRAを使用(参照画像1枚のときのみ)"),
@@ -505,8 +519,8 @@ async def generate(
                 "boxesはJSON配列で指定してください。各要素は id と、bbox(配置)または "
                 "src_bbox / tgt_bbox(編集、tgt_bbox=nullで削除)を持ち、座標は0〜1000の[top, left, bottom, right]です。",
             ) from exc
-    if any(n < 256 or n > 1024 or n % 32 for n in (width, height)):
-        raise HTTPException(422, "幅・高さは256〜1024の32の倍数で指定してください。")
+    if any(n < 256 or n > MAX_OUTPUT_SIDE or n % 32 for n in (width, height)) or width * height > MAX_OUTPUT_PIXELS:
+        raise HTTPException(422, f"幅・高さは256〜{MAX_OUTPUT_SIDE}の32の倍数で、合計{MAX_OUTPUT_PIXELS:,}画素(2048×2048)以下で指定してください。")
     if seed < -1 or seed > 2**32 - 1:
         raise HTTPException(422, "シードは-1（ランダム）または0〜4294967295で指定してください。")
     try:
@@ -534,14 +548,14 @@ async def generate(
             await upload.close()
         raise HTTPException(422, f"参照画像は{MAX_REFERENCES}枚までです。")
     references = []
-    max_side = reference_max_side(len(uploads), model)
+    max_pixels = reference_max_pixels(len(uploads), model)
     for upload in uploads:
         data = await upload.read(MAX_UPLOAD + 1)
         await upload.close()
         if len(data) > MAX_UPLOAD:
             raise HTTPException(413, "参照画像は1枚につき10MB以内にしてください。")
         try:
-            references.append(decode_reference(data, max_side=max_side))
+            references.append(decode_reference(data, max_pixels=max_pixels))
         except ValueError as exc:
             raise HTTPException(422, str(exc)) from exc
     if not engine.lock.acquire(blocking=False):
@@ -557,13 +571,14 @@ async def generate(
                         "model": model, "model_name": MODELS[model]["name"],
                         "seed": seed, "message": "生成を準備しています", "created_at": time.time(),
                         "reference_count": len(references),
-                        "reference_max_side": max_side if references else None,
+                        "reference_max_side": int(math.sqrt(max_pixels)) if references else None,
+                        "reference_max_pixels": max_pixels if references else None,
                         "upsample": bool(upsample), "upsampler": upsampler_backend,
                         "upsample_source": None, "warning": None,
                         "cancel": threading.Event()}
         response = public_job(jobs[job_id])
     try:
-        pool.submit(run_job, job_id, model, prompt, references, max_side, width, height, seed, outpaint,
+        pool.submit(run_job, job_id, model, prompt, references, max_pixels, width, height, seed, outpaint,
                     box_rows, bool(upsample), bool(upsample_strict), upsampler_backend, shift)
     except Exception:
         engine.lock.release()
