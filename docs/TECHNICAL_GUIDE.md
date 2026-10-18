@@ -3,7 +3,7 @@
 日本語 | [English](TECHNICAL_GUIDE.en.md)
 
 FLUX 3 Image Klein Reference Studio が、FLUX 3 Image Klein を Diffusers で 8GiB の VRAM に収めて動かすために使っている手法をまとめます。
-API の使い方は [API 仕様](API.md)、全項目は [API リファレンス](API_REFERENCE.md) を参照してください。
+API の使い方は [API 仕様](API.md)、全項目は [API リファレンス](API_REFERENCE.md)、プロンプトの書き方と作例は [プロンプトガイド](PROMPT_GUIDE.md) を参照してください。
 
 数値は、特記がなければ RTX PRO 4000 Blackwell(24GB)、Core i5-12400F、INT8、16 ステップ、タイムステップのシフト 16 での実測です(2026-10-18)。
 

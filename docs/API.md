@@ -6,6 +6,7 @@ FLUX 3 Image Klein Reference Studio（DiffusersサーバとGUIアプリ）は、
 
 - 全エンドポイントの入出力・エラー・環境変数の一覧: [APIリファレンス](API_REFERENCE.md)
 - 使っている手法(INT8の読み込み、メモリの設計、upsampler): [テクニカルガイド](TECHNICAL_GUIDE.md)
+- プロンプトの書き方と機能ごとの作例: [プロンプトガイド](PROMPT_GUIDE.md)
 - Swagger UI: `/docs`
 - ReDoc: `/redoc`
 - OpenAPI 3.1 JSON: `/openapi.json`

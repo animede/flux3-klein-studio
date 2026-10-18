@@ -4,6 +4,8 @@
 
 FLUX 3 Image KleinをDiffusersで動かし、8GBのVRAMに収めることを目的に開発したプロジェクトです。API機能を確かめるためのGUIアプリも提供しています。T2I、I2I、最大8枚の参照画像を使うRef2Iに対応します。
 
+![FLUX 3 Image Klein Reference Studioの構成概要](docs/architecture-overview.svg)
+
 > [!IMPORTANT]
 > アプリコードはApache-2.0ですが、FLUX 3モデルはFLUX Kommunity License v1.0です。モデル重みはこのリポジトリに含みません。詳細は[第三者ライセンスと注意事項](THIRD_PARTY_NOTICES.md)を確認してください。
 
@@ -23,7 +25,7 @@ CUDA_VISIBLE_DEVICES=0 ./run.sh                 # 2. サーバーを起動(Ctrl+
 # 3. ブラウザで http://127.0.0.1:7864/ を開く
 ```
 
-API仕様書: [docs/API.md](docs/API.md)、APIリファレンス: [docs/API_REFERENCE.md](docs/API_REFERENCE.md)、使っている手法: [テクニカルガイド](docs/TECHNICAL_GUIDE.md)
+API仕様書: [docs/API.md](docs/API.md)、APIリファレンス: [docs/API_REFERENCE.md](docs/API_REFERENCE.md)、使っている手法: [テクニカルガイド](docs/TECHNICAL_GUIDE.md)、プロンプトの書き方と作例: [プロンプトガイド](docs/PROMPT_GUIDE.md)
 
 ## モデル
 
