@@ -338,3 +338,29 @@ def test_engine_picks_the_hires_budget_above_1mp():
     e = engine.Engine()
     assert e.budget_for(1024, 1024) == e.memory_budget_gib
     assert e.budget_for(2048, 2048) == e.hires_memory_budget_gib
+
+
+def test_boxes_table_is_added_once(client, monkeypatch):
+    seen = []
+
+    def generate(model, prompt, ref, width, height, seed, progress, cancel, **kwargs):
+        seen.append(prompt)
+        return Image.new('RGB', (8, 8)), {'seconds': 1}
+    monkeypatch.setattr(service.engine, 'generate', generate)
+    boxes = '[{"id": "apple_1", "bbox": [550, 100, 900, 400], "desc": "apple"}]'
+    table = '[{"id": "apple_1", "bbox": [550, 100, 900, 400], "desc": "A red apple"}]'
+
+    def upsample(*args, **kwargs):
+        assert kwargs['boxes'][0]['id'] == 'apple_1'
+        return {'prompt': 'A red apple <apple_1>. ' + table, 'source': 'remote:x', 'model': 'm', 'mode': 't2i_bbox',
+                'cached': False, 'boxes_included': True}
+    monkeypatch.setattr(service.upsampler, 'upsample', upsample)
+    wait_job(client, client.post('/api/generate', data={'prompt': 'An apple <apple_1>', 'boxes': boxes}).json()['id'])
+    assert seen[-1].count('"id": "apple_1"') == 1
+    # an already expanded caption (with its table) sent without the upsampler is not doubled either
+    wait_job(client, client.post('/api/generate', data={'prompt': 'A red apple <apple_1>. ' + table, 'boxes': boxes,
+                                                        'upsample': 'false'}).json()['id'])
+    assert seen[-1].count('"id": "apple_1"') == 1
+    # a plain caption without the upsampler still gets the boxes appended
+    wait_job(client, client.post('/api/generate', data={'prompt': 'An apple <apple_1>', 'boxes': boxes, 'upsample': 'false'}).json()['id'])
+    assert seen[-1].endswith(boxes.replace('"desc": "apple"', '"desc": "apple"'))

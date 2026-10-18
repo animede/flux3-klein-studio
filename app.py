@@ -32,6 +32,7 @@ from fastapi.staticfiles import StaticFiles
 from PIL import Image, ImageOps, UnidentifiedImageError
 from pydantic import BaseModel
 
+import bbox
 import upsampler
 from engine import Cancelled, Engine
 from model_config import DEFAULT_MODEL, MODELS, ROOT
@@ -342,7 +343,7 @@ def run_job(job_id, model_key, prompt, references, reference_pixels, width, heig
                 upsample_info = upsampler.upsample(
                     prompt, images=references, width=width, height=height,
                     mode="i2i" if references else "t2i", backend=upsampler_backend,
-                    release_vram=engine.unload,
+                    release_vram=engine.unload, boxes=box_rows,
                 )
                 prompt = upsample_info["prompt"]
                 with jobs_lock:
@@ -352,7 +353,9 @@ def run_job(job_id, model_key, prompt, references, reference_pixels, width, heig
                     raise
                 with jobs_lock:
                     jobs[job_id]["warning"] = f"prompt upsamplerを使えなかったため、元のプロンプトで生成しました: {exc}"
-        if box_rows:
+        # With boxes, the upsampler already returns "<caption> [box table]" (layout mode). A caption expanded
+        # earlier ("expand and review", sent with upsample=false) also carries its table. Otherwise append it.
+        if box_rows and not (upsample_info and upsample_info.get("boxes_included")) and not bbox.is_finished(prompt):
             prompt = append_boxes(prompt, box_rows)
         if cancel.is_set():
             raise Cancelled()
@@ -416,6 +419,7 @@ async def enhance_prompt(
     width: int | None = Form(None, description="T2Iの出力幅(キャンバスの縦横比を伝える)。"),
     height: int | None = Form(None, description="T2Iの出力高さ。"),
     upsampler_backend: str | None = Form(None, alias="upsampler", description="auto / remote / local / pup-int8 / pup-gguf。省略時はKLEIN_UPSAMPLER(既定auto)。"),
+    boxes: str = Form("", description="任意のバウンディングボックスJSON(/api/generateと同じ書式)。指定するとレイアウト用のモードで展開し、キャプションの後ろに枠の表が付く。"),
 ):
     """公式システムプロンプトでLLMにキャプションを書かせる(upsampler.py 参照)。
 
@@ -438,10 +442,16 @@ async def enhance_prompt(
             images.append(decode_reference(data, max_pixels=MAX_OUTPUT_PIXELS))
         except ValueError as exc:
             raise HTTPException(422, str(exc)) from exc
+    box_rows = None
+    if boxes.strip():
+        try:
+            box_rows = parse_boxes(boxes)
+        except (ValueError, TypeError, json.JSONDecodeError) as exc:
+            raise HTTPException(422, "boxesはJSON配列で指定してください(/api/generateと同じ書式)。") from exc
     try:
         result = await run_in_threadpool(
             upsampler.upsample, prompt, mode=mode, images=images, width=width, height=height,
-            backend=upsampler_backend, release_vram=release_vram_if_idle,
+            backend=upsampler_backend, release_vram=release_vram_if_idle, boxes=box_rows,
         )
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc

@@ -59,6 +59,7 @@ from pathlib import Path
 
 import httpx
 
+import bbox
 import model_config
 
 ROOT = Path(__file__).resolve().parent
@@ -609,7 +610,7 @@ def backends() -> dict:
 
 def upsample(request: str, *, mode: str = "auto", images=(), width: int | None = None,
              height: int | None = None, use_local: bool = True, backend: str | None = None,
-             release_vram=None) -> dict:
+             release_vram=None, boxes: list | None = None) -> dict:
     """Expand `request` into a full FLUX 3 caption.
 
     `backend` is one of BACKENDS (default `KLEIN_UPSAMPLER`, else "auto"). `release_vram` is called
@@ -622,6 +623,14 @@ def upsample(request: str, *, mode: str = "auto", images=(), width: int | None =
     images = list(images or ())
     mode = resolve_mode(mode, len(images))
     backend = resolve_backend(backend)
+    locked = None
+    if boxes:
+        # BFL's layout mode (src/flux3/bbox.py): the boxes go to the upsampler as locked annotations under a
+        # t2i_bbox / i2i_bbox system prompt; its answer cites each box as <id> and ends with the box table,
+        # and reconcile() re-imposes the user's ids and coordinates on it.
+        locked = bbox.to_canvas(boxes)
+        mode = ("i2i" if mode.startswith("i2i") else "t2i") + "_bbox"
+        request = bbox.upsampling_input(request, locked)
     key = _cache_key(backend, mode, request, images, width, height)
     with _cache_lock:
         if key in _cache:
@@ -671,6 +680,9 @@ def upsample(request: str, *, mode: str = "auto", images=(), width: int | None =
             reasons.append(f"ローカル LLM: {type(exc).__name__}: {exc}")
     if result is None:
         raise UpsampleUnavailable("prompt upsamplerに使える LLM がありません(" + " / ".join(reasons) + ")")
+    if locked:
+        result["prompt"] = bbox.reconcile(result["prompt"], locked)
+        result["boxes_included"] = True
     with _cache_lock:
         _cache[key] = result
         while len(_cache) > CACHE_SIZE:

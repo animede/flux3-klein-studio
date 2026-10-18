@@ -219,3 +219,24 @@ def test_llm_prompt_style_can_be_switched_back(monkeypatch):
     assert upsampler.llm_prompt_style() == "pup"
     monkeypatch.setenv("KLEIN_LLM_PROMPTS", "external")
     assert upsampler.llm_prompt_style() == "external"
+
+
+def test_boxes_use_layout_mode_and_are_reconciled(monkeypatch):
+    seen = {}
+
+    def model_info(url, timeout):
+        return {"id": "m", "multimodal": True}
+
+    def chat(url, model, messages, timeout, mode="t2i"):
+        seen["mode"], seen["user"] = mode, messages[1]["content"]
+        # the LLM renames the box and adds an uncited one: the user's id and box must come back
+        return ('A red apple <fruit_1> on a table. '
+                '[{"id": "fruit_1", "bbox": [551, 101, 899, 399], "desc": "A shiny red apple"},'
+                ' {"id": "mug_1", "bbox": [400, 600, 900, 900], "desc": "A mug"}]')
+    monkeypatch.setattr(upsampler, "_model_info", model_info)
+    monkeypatch.setattr(upsampler, "_chat", chat)
+    rows = [{"id": "apple_1", "bbox": [550, 100, 900, 400], "desc": "apple"}]
+    out = upsampler.upsample("An apple <apple_1>", backend="remote", boxes=rows)
+    assert seen["mode"] == "t2i_bbox" and "LOCKED BOUNDING-BOX ANNOTATIONS" in seen["user"]
+    assert out["boxes_included"] and out["prompt"].startswith("A red apple <apple_1> on a table.")
+    assert out["prompt"].endswith('[{"id": "apple_1", "bbox": [550, 100, 900, 400], "desc": "A shiny red apple"}]')

@@ -203,6 +203,8 @@ $('llm-prompt').onclick = async () => {
   try {
     // 編集(参照画像あり)では画像も LLM に見せる(公式 i2i 形式は参照画像の記述に編集内容を織り込むため)。
     const data = new FormData(); data.set('prompt', field.value); data.set('mode', 'auto'); data.set('upsampler', $('upsampler').value);
+    // With layout boxes, the caption comes back in layout mode with the box table appended.
+    if (!/^\s*(\[\s*\])?\s*$/.test($('boxes').value)) data.set('boxes', $('boxes').value);
     const [w, h] = $('size').value.split(','); data.set('width', w); data.set('height', h);
     for (const file of $('image-input').files) data.append('image', file);
     const result = await request('/api/enhance-prompt', {method: 'POST', body: data});
@@ -214,10 +216,33 @@ $('llm-prompt').onclick = async () => {
 const boxCanvas = $('box-canvas');
 const boxCtx = boxCanvas.getContext('2d');
 let boxImage = null; let drawnBoxes = []; let boxStart = null;
+// Box editor. The canvas takes the aspect of the reference image (when there is one) or of the output size,
+// and the image fills it, so 0-1000 box coordinates are relative to the image / output frame.
+function resizeBoxCanvas() {
+  const [w, h] = boxImage ? [boxImage.width, boxImage.height] : $('size').value.split(',').map(Number);
+  let cw = 640, ch = Math.round(640 * h / w);
+  if (ch > 480) { ch = 480; cw = Math.round(480 * w / h); }
+  boxCanvas.width = cw; boxCanvas.height = ch;
+  paintBoxes();
+}
 function paintBoxes() {
   boxCtx.fillStyle = '#111'; boxCtx.fillRect(0, 0, boxCanvas.width, boxCanvas.height);
-  if (boxImage) { const scale = Math.min(boxCanvas.width / boxImage.width, boxCanvas.height / boxImage.height); const w = boxImage.width * scale, h = boxImage.height * scale; boxCtx.drawImage(boxImage, (boxCanvas.width-w)/2, (boxCanvas.height-h)/2, w, h); }
-  drawnBoxes.forEach((b, i) => { const x=b.bbox[1]*boxCanvas.width/1000, y=b.bbox[0]*boxCanvas.height/1000, w=(b.bbox[3]-b.bbox[1])*boxCanvas.width/1000, h=(b.bbox[2]-b.bbox[0])*boxCanvas.height/1000; boxCtx.strokeStyle='#c0efbb'; boxCtx.lineWidth=2; boxCtx.strokeRect(x,y,w,h); boxCtx.fillStyle='#c0efbb'; boxCtx.fillText(b.id || `box_${i+1}`, x+4, y+14); });
+  if (boxImage) boxCtx.drawImage(boxImage, 0, 0, boxCanvas.width, boxCanvas.height);
+  const rect = (b, color, dash) => {
+    const x = b[1] * boxCanvas.width / 1000, y = b[0] * boxCanvas.height / 1000;
+    const w = (b[3] - b[1]) * boxCanvas.width / 1000, h = (b[2] - b[0]) * boxCanvas.height / 1000;
+    boxCtx.setLineDash(dash); boxCtx.strokeStyle = color; boxCtx.lineWidth = 2; boxCtx.strokeRect(x, y, w, h);
+    return [x, y];
+  };
+  drawnBoxes.forEach((row, i) => {
+    const label = row.id || `box_${i + 1}`;
+    for (const [key, color, dash] of [['src_bbox', '#f0ca86', [6, 4]], ['bbox', '#c0efbb', []], ['tgt_bbox', '#c0efbb', []]]) {
+      if (!Array.isArray(row[key])) continue;
+      const [x, y] = rect(row[key], color, dash);
+      boxCtx.setLineDash([]); boxCtx.fillStyle = color; boxCtx.font = '12px sans-serif';
+      boxCtx.fillText(key === 'src_bbox' ? `${label}（元）` : label, x + 4, y + 14);
+    }
+  });
 }
 function syncBoxes() { $('boxes').value = drawnBoxes.length ? JSON.stringify(drawnBoxes, null, 2) : ''; paintBoxes(); updateBoxesCount(); }
 function updateBoxesCount() {
@@ -225,10 +250,30 @@ function updateBoxesCount() {
   try { const rows = JSON.parse($('boxes').value || '[]'); count = Array.isArray(rows) ? rows.length : 0; } catch { count = -1; }
   $('boxes-count').textContent = count > 0 ? `（${count}件）` : count < 0 ? '（JSONを確認）' : '';
 }
-$('boxes').addEventListener('input', updateBoxesCount);
-$('image-input').addEventListener('change', () => { const file=$('image-input').files[0]; if (!file) return; const img=new Image(); img.onload=()=>{boxImage=img;paintBoxes();}; img.src=URL.createObjectURL(file); });
+// Edits in the JSON (ids, descriptions, src/tgt boxes) become the drawn rows, so drawing more keeps them.
+$('boxes').addEventListener('input', () => {
+  updateBoxesCount();
+  try { const rows = JSON.parse($('boxes').value || '[]'); if (Array.isArray(rows)) { drawnBoxes = rows; paintBoxes(); } } catch {}
+});
+$('image-input').addEventListener('change', () => {
+  const file = $('image-input').files[0];
+  if (!file) { boxImage = null; resizeBoxCanvas(); return; }
+  const img = new Image(); img.onload = () => { boxImage = img; resizeBoxCanvas(); }; img.src = URL.createObjectURL(file);
+});
+$('size').addEventListener('change', () => { if (!boxImage) resizeBoxCanvas(); });
 boxCanvas.addEventListener('pointerdown', e => { const r=boxCanvas.getBoundingClientRect(); boxStart=[(e.clientX-r.left)*boxCanvas.width/r.width,(e.clientY-r.top)*boxCanvas.height/r.height]; boxCanvas.setPointerCapture(e.pointerId); });
-boxCanvas.addEventListener('pointerup', e => { if (!boxStart) return; const r=boxCanvas.getBoundingClientRect(); const x=(e.clientX-r.left)*boxCanvas.width/r.width,y=(e.clientY-r.top)*boxCanvas.height/r.height; const x1=Math.max(0,Math.min(boxStart[0],x))*1000/boxCanvas.width,y1=Math.max(0,Math.min(boxStart[1],y))*1000/boxCanvas.height,x2=Math.min(boxCanvas.width,Math.max(boxStart[0],x))*1000/boxCanvas.width,y2=Math.min(boxCanvas.height,Math.max(boxStart[1],y))*1000/boxCanvas.height; drawnBoxes.push({id:`box_${drawnBoxes.length+1}`,bbox:[Math.round(y1),Math.round(x1),Math.round(y2),Math.round(x2)],desc:'配置要素'}); boxStart=null; syncBoxes(); });
+boxCanvas.addEventListener('pointerup', e => {
+  if (!boxStart) return;
+  const r = boxCanvas.getBoundingClientRect();
+  const x = (e.clientX - r.left) * boxCanvas.width / r.width, y = (e.clientY - r.top) * boxCanvas.height / r.height;
+  const x1 = Math.max(0, Math.min(boxStart[0], x)) * 1000 / boxCanvas.width, y1 = Math.max(0, Math.min(boxStart[1], y)) * 1000 / boxCanvas.height;
+  const x2 = Math.min(boxCanvas.width, Math.max(boxStart[0], x)) * 1000 / boxCanvas.width, y2 = Math.min(boxCanvas.height, Math.max(boxStart[1], y)) * 1000 / boxCanvas.height;
+  boxStart = null;
+  if (x2 - x1 < 5 || y2 - y1 < 5) return;  // a click, not a drag
+  drawnBoxes.push({id: `box_${drawnBoxes.length + 1}`, bbox: [Math.round(y1), Math.round(x1), Math.round(y2), Math.round(x2)], desc: '配置要素'});
+  syncBoxes();
+});
+resizeBoxCanvas();
 $('clear-boxes').onclick = () => { drawnBoxes=[]; syncBoxes(); };
 $('cancel').onclick = async () => {
   if (!activeJob) return;

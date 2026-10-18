@@ -64,6 +64,12 @@ builds of the official upsampler. They are not part of this repository.
   from [rekuen/flux-3-image-klein-pup-GGUF](https://huggingface.co/rekuen/flux-3-image-klein-pup-GGUF)
   (community-made, Apache License 2.0, pinned revision). It is not published by Black Forest Labs.
 
+## Code adapted from the FLUX 3 Image Klein reference code
+
+`bbox.py` (locked-box upsampler input and reconciliation of the upsampler's answer) is adapted from
+`src/flux3/bbox.py` of [black-forest-labs/flux-3-image-klein](https://github.com/black-forest-labs/flux-3-image-klein)
+(Apache License 2.0). The changes are noted at the top of the file.
+
 ## Python packages
 
 Packages installed from `requirements.txt` remain under their respective licenses.

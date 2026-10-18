@@ -44,6 +44,10 @@ downloads quantized builds of the upsampler for local use:
   - Community Q4_K_M GGUF with its vision projector (Apache License 2.0):
     https://huggingface.co/rekuen/flux-3-image-klein-pup-GGUF
 
+bbox.py is adapted from src/flux3/bbox.py of
+https://github.com/black-forest-labs/flux-3-image-klein (Apache License 2.0,
+Copyright Black Forest Labs).
+
 FLUX and Black Forest Labs are trademarks of their respective owners. This
 project is an independent work and is not affiliated with or endorsed by
 Black Forest Labs Inc.
