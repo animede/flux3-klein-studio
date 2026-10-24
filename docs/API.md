@@ -7,6 +7,7 @@ FLUX 3 Image Klein Reference Studio（DiffusersサーバとGUIアプリ）は、
 - 全エンドポイントの入出力・エラー・環境変数の一覧: [APIリファレンス](API_REFERENCE.md)
 - 使っている手法(INT8の読み込み、メモリの設計、upsampler): [テクニカルガイド](TECHNICAL_GUIDE.md)
 - プロンプトの書き方と機能ごとの作例: [プロンプトガイド](PROMPT_GUIDE.md)
+- 8方向のキャラクターシート: [キャラクターシートAPI](CHARSHEET.md)
 - Swagger UI: `/docs`
 - ReDoc: `/redoc`
 - OpenAPI 3.1 JSON: `/openapi.json`
@@ -29,6 +30,9 @@ FLUX 3 Image Klein Reference Studio（DiffusersサーバとGUIアプリ）は、
 | `POST` | `/api/unload` | 現在のモデルをCPU/GPUメモリから解放 |
 | `GET` | `/api/gallery` | 生成画像の一覧(新しい順) |
 | `DELETE` | `/api/gallery/{id}` | 生成画像を削除(メタデータと参照画像も) |
+| `POST` | `/api/charsheet/generate` | 8方向のキャラクターシートを開始([キャラクターシートAPI](CHARSHEET.md)) |
+| `GET` | `/api/charsheet/jobs/{job_id}` | キャラクターシートの状態(方向ごとの画像URL、シート、ZIP) |
+| `POST` | `/api/charsheet/jobs/{job_id}/cancel` | キャラクターシートの停止を要求 |
 
 ## 画像生成
 

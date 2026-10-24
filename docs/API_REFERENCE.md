@@ -5,7 +5,7 @@
 FLUX 3 Image Klein Reference Studio の HTTP API の全エンドポイント、パラメータ、レスポンス、エラーの一覧です。
 使い方の流れと呼び出し例は [API 仕様(ガイド)](API.md) を参照してください。
 
-- API バージョン: `0.3.0`(`/openapi.json` の `info.version`)
+- API バージョン: `0.4.0`(`/openapi.json` の `info.version`)
 - ベース URL: `http://127.0.0.1:7864`(`KLEIN_HOST` / `KLEIN_PORT` で変更)
 - 認証: なし。既定では `127.0.0.1` だけで待ち受けます。外部に公開する場合は、リバースプロキシなどで認証とアクセス制限を掛けてください。
 - 機械可読な仕様: `GET /openapi.json`(OpenAPI 3.1)、`GET /docs`(Swagger UI)、`GET /redoc`(ReDoc)
@@ -25,6 +25,10 @@ FLUX 3 Image Klein Reference Studio の HTTP API の全エンドポイント、�
 | `GET` | [`/api/gallery`](#get-apigallery) | 生成画像の一覧(新しい順) | `200` |
 | `DELETE` | [`/api/gallery/{id}`](#delete-apigalleryid) | 生成画像を削除 | `200` |
 | `GET` | [`/outputs/{file}`](#get-outputsfile) | 生成した PNG とメタデータ JSON | `200` |
+| `POST` | [`/api/charsheet/generate`](CHARSHEET.md#post-apicharsheetgenerate) | 8 方向のキャラクターシートを開始 | `202` |
+| `GET` | [`/api/charsheet/jobs/{job_id}`](CHARSHEET.md#get-apicharsheetjobsjob_id) | キャラクターシートの状態 | `200` |
+| `POST` | [`/api/charsheet/jobs/{job_id}/cancel`](CHARSHEET.md#get-apicharsheetjobsjob_id) | キャラクターシートの停止を要求 | `200` |
+| `GET` | [`/api/charsheet/jobs/{job_id}/…`](CHARSHEET.md#ファイル) | 方向ごとの画像・シート・ZIP・メタデータ | `200` |
 | `GET` | `/` | Web 画面 | `200` |
 
 ## 基本の流れ

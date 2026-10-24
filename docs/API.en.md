@@ -6,6 +6,7 @@ FLUX 3 Image Klein Reference Studio (Diffusers server and GUI app) provides a jo
 
 - Inputs, outputs, errors, and environment variables for every endpoint: [API Reference](API_REFERENCE.en.md)
 - Techniques used (INT8 loading, memory design, upsampler): [Technical Guide](TECHNICAL_GUIDE.en.md)
+- Eight-view character sheets: [Character Sheet API](CHARSHEET.en.md)
 - Swagger UI: `/docs`
 - ReDoc: `/redoc`
 - OpenAPI 3.1 JSON: `/openapi.json`
@@ -28,6 +29,9 @@ By default the server listens only on `127.0.0.1`. If you expose it externally, 
 | `POST` | `/api/unload` | Release the current model from CPU/GPU memory |
 | `GET` | `/api/gallery` | List generated images (newest first) |
 | `DELETE` | `/api/gallery/{id}` | Delete a generated image (with its metadata and reference images) |
+| `POST` | `/api/charsheet/generate` | Start an eight-view character sheet ([Character Sheet API](CHARSHEET.en.md)) |
+| `GET` | `/api/charsheet/jobs/{job_id}` | Character sheet status (image URL per direction, sheet, ZIP) |
+| `POST` | `/api/charsheet/jobs/{job_id}/cancel` | Request cancellation of a character sheet |
 
 ## Image Generation
 

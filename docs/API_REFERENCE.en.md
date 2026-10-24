@@ -5,7 +5,7 @@
 A complete list of the endpoints, parameters, responses, and errors of the FLUX 3 Image Klein Reference Studio HTTP API.
 For the overall workflow and usage examples, see the [API specification (guide)](API.en.md).
 
-- API version: `0.3.0` (`info.version` in `/openapi.json`)
+- API version: `0.4.0` (`info.version` in `/openapi.json`)
 - Base URL: `http://127.0.0.1:7864` (change with `KLEIN_HOST` / `KLEIN_PORT`)
 - Authentication: none. By default the server listens on `127.0.0.1` only. If you expose it externally, add authentication and access control with a reverse proxy or similar.
 - Machine-readable spec: `GET /openapi.json` (OpenAPI 3.1), `GET /docs` (Swagger UI), `GET /redoc` (ReDoc)
@@ -25,6 +25,10 @@ For the overall workflow and usage examples, see the [API specification (guide)]
 | `GET` | [`/api/gallery`](#get-apigallery) | List generated images (newest first) | `200` |
 | `DELETE` | [`/api/gallery/{id}`](#delete-apigalleryid) | Delete a generated image | `200` |
 | `GET` | [`/outputs/{file}`](#get-outputsfile) | Generated PNG and metadata JSON | `200` |
+| `POST` | [`/api/charsheet/generate`](CHARSHEET.en.md#post-apicharsheetgenerate) | Start an eight-view character sheet | `202` |
+| `GET` | [`/api/charsheet/jobs/{job_id}`](CHARSHEET.en.md#get-apicharsheetjobsjob_id) | Character sheet status | `200` |
+| `POST` | [`/api/charsheet/jobs/{job_id}/cancel`](CHARSHEET.en.md#get-apicharsheetjobsjob_id) | Request cancellation of a character sheet | `200` |
+| `GET` | [`/api/charsheet/jobs/{job_id}/…`](CHARSHEET.en.md#files) | Images per direction, sheet, ZIP, metadata | `200` |
 | `GET` | `/` | Web UI | `200` |
 
 ## Basic flow

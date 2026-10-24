@@ -23,7 +23,7 @@ CUDA_VISIBLE_DEVICES=0 ./run.sh                 # 2. start the server (Ctrl+C to
 # 3. open http://127.0.0.1:7864/ in a browser
 ```
 
-API guide: [docs/API.en.md](docs/API.en.md), API reference: [docs/API_REFERENCE.en.md](docs/API_REFERENCE.en.md), techniques used: [Technical guide](docs/TECHNICAL_GUIDE.en.md)
+API guide: [docs/API.en.md](docs/API.en.md), API reference: [docs/API_REFERENCE.en.md](docs/API_REFERENCE.en.md), techniques used: [Technical guide](docs/TECHNICAL_GUIDE.en.md), eight-view character sheets: [Character Sheet API](docs/CHARSHEET.en.md)
 
 ## Model
 

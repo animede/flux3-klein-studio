@@ -25,7 +25,7 @@ CUDA_VISIBLE_DEVICES=0 ./run.sh                 # 2. サーバーを起動(Ctrl+
 # 3. ブラウザで http://127.0.0.1:7864/ を開く
 ```
 
-API仕様書: [docs/API.md](docs/API.md)、APIリファレンス: [docs/API_REFERENCE.md](docs/API_REFERENCE.md)、使っている手法: [テクニカルガイド](docs/TECHNICAL_GUIDE.md)、プロンプトの書き方と作例: [プロンプトガイド](docs/PROMPT_GUIDE.md)
+API仕様書: [docs/API.md](docs/API.md)、APIリファレンス: [docs/API_REFERENCE.md](docs/API_REFERENCE.md)、使っている手法: [テクニカルガイド](docs/TECHNICAL_GUIDE.md)、プロンプトの書き方と作例: [プロンプトガイド](docs/PROMPT_GUIDE.md)、8方向のキャラクターシート: [キャラクターシートAPI](docs/CHARSHEET.md)
 
 ## モデル
 

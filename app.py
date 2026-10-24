@@ -33,6 +33,7 @@ from PIL import Image, ImageOps, UnidentifiedImageError
 from pydantic import BaseModel
 
 import bbox
+import charsheet
 import upsampler
 from engine import Cancelled, Engine
 from model_config import DEFAULT_MODEL, MODELS, ROOT
@@ -47,7 +48,7 @@ MAX_REFERENCES = 8
 MAX_OUTPUT_PIXELS = 2048 * 2048  # 2K / 4 MP, BFL's recommended size
 MAX_OUTPUT_SIDE = 2688
 
-app = FastAPI(title="FLUX 3 Image Klein Reference Studio（DiffusersサーバとGUIアプリ）", version="0.3.0", description="FLUX 3 Image KleinをDiffusersで動かし、8GBのVRAMに収めた画像生成・編集サーバーです。")
+app = FastAPI(title="FLUX 3 Image Klein Reference Studio（DiffusersサーバとGUIアプリ）", version="0.4.0", description="FLUX 3 Image KleinをDiffusersで動かし、8GBのVRAMに収めた画像生成・編集サーバーです。")
 @app.middleware("http")
 async def _revalidate_gui(request, call_next):
     # Make browsers revalidate the GUI after an update instead of running a stale app.js.
@@ -292,6 +293,15 @@ def reference_max_pixels(count: int, model_key: str = DEFAULT_MODEL) -> int:
     return int(min(config["reference_max_pixels"], total / max(count, 1)))
 
 
+def limit_pixels(image, max_pixels: int):
+    """Downscale by area (keeping the aspect) when the image has more than max_pixels."""
+    if image.width * image.height <= max_pixels:
+        return image
+    scale = math.sqrt(max_pixels / (image.width * image.height))
+    return image.resize((max(16, int(image.width * scale)), max(16, int(image.height * scale))),
+                        Image.Resampling.LANCZOS)
+
+
 def decode_reference(data: bytes, max_pixels: int = 1024 * 1024):
     try:
         with Image.open(io.BytesIO(data)) as im:
@@ -306,11 +316,7 @@ def decode_reference(data: bytes, max_pixels: int = 1024 * 1024):
             else:
                 result = im.convert("RGB")
             # Bound reference tokens separately from the output resolution (by area, keeping the aspect).
-            if result.width * result.height > max_pixels:
-                scale = math.sqrt(max_pixels / (result.width * result.height))
-                result = result.resize((max(16, int(result.width * scale)), max(16, int(result.height * scale))),
-                                       Image.Resampling.LANCZOS)
-            return result.copy()
+            return limit_pixels(result, max_pixels).copy()
     except (UnidentifiedImageError, OSError, Image.DecompressionBombError) as exc:
         raise ValueError("画像を読み込めません。PNG、JPEG、WebPなどの画像を選んでください。") from exc
 
@@ -489,6 +495,13 @@ def parse_boxes(raw: str) -> list:
     return rows
 
 
+def check_size_and_seed(width: int, height: int, seed: int):
+    if any(n < 256 or n > MAX_OUTPUT_SIDE or n % 32 for n in (width, height)) or width * height > MAX_OUTPUT_PIXELS:
+        raise HTTPException(422, f"幅・高さは256〜{MAX_OUTPUT_SIDE}の32の倍数で、合計{MAX_OUTPUT_PIXELS:,}画素(2048×2048)以下で指定してください。")
+    if seed < -1 or seed > 2**32 - 1:
+        raise HTTPException(422, "シードは-1（ランダム）または0〜4294967295で指定してください。")
+
+
 def append_boxes(prompt: str, rows: list) -> str:
     """モデルカードの書式: キャプションの後に空白1つ、そのあとにJSON配列(要素はキャプション中で <id> を引用)。"""
     return f"{prompt.rstrip()} {json.dumps(rows, ensure_ascii=False)}"
@@ -529,10 +542,7 @@ async def generate(
                 "boxesはJSON配列で指定してください。各要素は id と、bbox(配置)または "
                 "src_bbox / tgt_bbox(編集、tgt_bbox=nullで削除)を持ち、座標は0〜1000の[top, left, bottom, right]です。",
             ) from exc
-    if any(n < 256 or n > MAX_OUTPUT_SIDE or n % 32 for n in (width, height)) or width * height > MAX_OUTPUT_PIXELS:
-        raise HTTPException(422, f"幅・高さは256〜{MAX_OUTPUT_SIDE}の32の倍数で、合計{MAX_OUTPUT_PIXELS:,}画素(2048×2048)以下で指定してください。")
-    if seed < -1 or seed > 2**32 - 1:
-        raise HTTPException(422, "シードは-1（ランダム）または0〜4294967295で指定してください。")
+    check_size_and_seed(width, height, seed)
     try:
         upsampler_backend = upsampler.resolve_backend(upsampler_backend)
     except ValueError as exc:
@@ -594,3 +604,345 @@ async def generate(
         engine.lock.release()
         raise
     return response
+
+
+# ---------------------------------------------------------------------------------------------------------------
+# Character sheet: eight views, one Edit each (charsheet.py). Same response shape and view keys as the
+# character sheets of other servers, so clients can switch backends with few changes.
+# ---------------------------------------------------------------------------------------------------------------
+
+charsheet_jobs = {}
+FINISHED = {"done", "error", "cancelled"}
+
+
+class CharsheetView(BaseModel):
+    key: str
+    label_ja: str
+    label_en: str
+    status: str
+    url: str | None = None
+
+
+class CharsheetJob(BaseModel):
+    job_id: str
+    status: str
+    progress: int
+    total: int
+    views: list[CharsheetView]
+    sheet_url: str | None = None
+    zip_url: str | None = None
+    error: str | None = None
+    seed: int
+    width: int
+    height: int
+    requested_views: list[str]
+    prep: str
+    prep_applied: bool
+    prep_status: str
+    prep_url: str | None = None
+    input_url: str
+    reference_url: str
+    white_background_ratio: float
+    current: str | None = None
+    step: int = 0
+    steps: int
+    message: str = ""
+    upsample: bool
+    upsampler: str
+    warning: str | None = None
+    metadata_url: str | None = None
+    created_at: float
+
+
+def charsheet_root() -> Path:
+    return OUTPUTS / "charsheet"
+
+
+def charsheet_url(job_id: str, name: str) -> str:
+    return f"/api/charsheet/jobs/{job_id}/{name}"
+
+
+def public_charsheet(job):
+    return {k: v for k, v in job.items() if k not in {"cancel", "details"}}
+
+
+def save_charsheet_state(job_id):
+    """job.json: the public state plus the prompt used for each view. GET restores from it after a restart."""
+    with jobs_lock:
+        job = charsheet_jobs.get(job_id)
+        if job is None:
+            return
+        state = {**public_charsheet(job), "details": job["details"]}
+    folder = charsheet_root() / job_id
+    if folder.is_dir():
+        (folder / "job.json").write_text(json.dumps(state, ensure_ascii=False, indent=2))
+
+
+def load_charsheet(job_id: str):
+    if not JOB_ID.fullmatch(job_id):
+        return None
+    with jobs_lock:
+        if job_id in charsheet_jobs:
+            return public_charsheet(charsheet_jobs[job_id])
+    path = charsheet_root() / job_id / "job.json"
+    try:
+        state = json.loads(path.read_text())
+    except (OSError, ValueError):
+        return None
+    state.pop("details", None)
+    if state.get("status") not in FINISHED:  # the server stopped while this job was running
+        state.update(status="error", error="サーバーの再起動で中断されました。", current=None)
+    return state
+
+
+def run_charsheet_job(job_id, source, prep, keys, width, height, seed, upsample, upsample_strict,
+                      upsampler_backend, shift):
+    folder = charsheet_root() / job_id
+    model_key = DEFAULT_MODEL
+
+    def update(**values):
+        with jobs_lock:
+            charsheet_jobs[job_id].update(values)
+
+    def update_view(key, **values):
+        with jobs_lock:
+            for view in charsheet_jobs[job_id]["views"]:
+                if view["key"] == key:
+                    view.update(values)
+
+    def edit(prompt, reference, label):
+        """One Edit from the reference; returns the image and the prompt actually used."""
+        def progress(status, step, message):
+            update(step=step, message=f"{label}: {message}")
+
+        source_name = None
+        if upsample:
+            update(step=0, message=f"{label}: プロンプトをLLMで展開しています")
+            try:
+                info = upsampler.upsample(prompt, images=[reference], width=width, height=height, mode="i2i",
+                                          backend=upsampler_backend, release_vram=engine.unload)
+                prompt, source_name = info["prompt"], info["source"]
+            except upsampler.UpsampleUnavailable as exc:
+                if upsample_strict:
+                    raise
+                update(warning=f"prompt upsamplerを使えなかったため、元のプロンプトで生成しました: {exc}")
+        if cancel.is_set():
+            raise Cancelled()
+        image, metrics = engine.generate(model_key, prompt, reference, width, height, seed, progress, cancel,
+                                         shift=shift)
+        if cancel.is_set():
+            raise Cancelled()
+        with jobs_lock:
+            charsheet_jobs[job_id]["details"][label] = {
+                "prompt": prompt, "upsample_source": source_name, "seconds": metrics.get("seconds"),
+                "total_seconds": metrics.get("total_seconds"), "peak_allocated_gib": metrics.get("peak_allocated_gib")}
+        return image
+
+    try:
+        with jobs_lock:
+            cancel = charsheet_jobs[job_id]["cancel"]
+        update(status="running")
+        reference = source
+        if prep:
+            update(prep_status="running", current="prep")
+            prepared = edit(charsheet.PREP_PROMPT, source, "prep")
+            prepared.save(folder / "prep.png")
+            # Views read the prepared image as their reference, bounded like any reference.
+            reference = limit_pixels(prepared, reference_max_pixels(1, model_key))
+            update(prep_status="done", prep_url=charsheet_url(job_id, "prep.png"),
+                   reference_url=charsheet_url(job_id, "prep.png"))
+            save_charsheet_state(job_id)
+        for key in keys:
+            if cancel.is_set():
+                raise Cancelled()
+            update(current=key, step=0)
+            update_view(key, status="running")
+            out = folder / f"{key}.png"
+            if key == "front" and prep:
+                # The prepared image already is the white-background front view.
+                prepared.save(out)
+            else:
+                edit(charsheet.view_prompt(key), reference, key).save(out)
+            update_view(key, status="done", url=charsheet_url(job_id, f"images/{key}.png"))
+            with jobs_lock:
+                charsheet_jobs[job_id]["progress"] += 1
+            save_charsheet_state(job_id)
+        update(current=None, message="キャラクターシートをまとめています")
+        images = {key: folder / f"{key}.png" for key in keys}
+        charsheet.build_sheet(images).save(folder / "sheet.png")
+        extra = {"input.png": folder / "input.png", "prep.png": folder / "prep.png", "sheet.png": folder / "sheet.png"}
+        (folder / "download.zip").write_bytes(charsheet.build_zip(
+            {**{f"{key}.png": path for key, path in images.items()}, **extra}))
+        update(status="done", message="キャラクターシートが完成しました", sheet_url=charsheet_url(job_id, "sheet.png"),
+               zip_url=charsheet_url(job_id, "download.zip"))
+    except Cancelled:
+        with jobs_lock:
+            job = charsheet_jobs[job_id]
+            job.update(status="cancelled", current=None, message="生成を停止しました")
+            if job["prep_status"] in {"queued", "running"}:
+                job["prep_status"] = "cancelled"
+            for view in job["views"]:
+                if view["status"] in {"queued", "running"}:
+                    view["status"] = "cancelled"
+        engine.unload()
+    except Exception as exc:
+        log.exception("Character sheet failed: %s", job_id)
+        message = str(exc)
+        if "out of memory" in message.lower():
+            message = "GPUメモリが不足しました。幅・高さを下げて再試行してください。"
+        with jobs_lock:
+            job = charsheet_jobs[job_id]
+            failed = job["current"]
+            job.update(status="error", error=f"{failed}: {message}"[:1000] if failed else message[:1000],
+                       current=None, message="生成に失敗しました")
+            if job["prep_status"] == "running":
+                job["prep_status"] = "error"
+            for view in job["views"]:
+                if view["status"] == "running":
+                    view["status"] = "error"
+        engine.unload()
+    finally:
+        save_charsheet_state(job_id)
+        engine.lock.release()
+
+
+@app.post(
+    "/api/charsheet/generate", status_code=202, summary="8方向のキャラクターシートを開始",
+    responses={
+        409: {"description": "別の生成を実行中、またはモデルが未取得です"},
+        413: {"description": "画像が10MBを超えています"},
+        422: {"description": "入力値が範囲外、または画像を読み込めません"},
+    },
+)
+async def charsheet_generate(
+    image: UploadFile = File(..., description="キャラクターの画像1枚。白背景・全身・正面が最適(それ以外はprepで変換)。"),
+    seed: int = Form(-1, description="全方向で共通のシード。-1でランダム、または0〜4294967295。"),
+    views: str = Form("", description="方向キーのカンマ区切り。省略時は8方向: front, back, left, right, "
+                                      "front_left_45, front_right_45, back_left_45, back_right_45。"),
+    width: int | None = Form(None, description="各方向の幅。既定768。256〜2688の32の倍数。"),
+    height: int | None = Form(None, description="各方向の高さ。既定1024。"),
+    size: int | None = Form(None, description="正方形で指定する場合の一辺(width/height省略時のみ。32の倍数に切り下げ)。"),
+    prep: str = Form("auto", description="白背景・全身・正面への事前変換。auto=背景が白でなければ行う / on / off。"
+                                         "行った場合、その画像がfrontになり、prep_urlで取得できる。"),
+    upsample: bool = Form(True, description="/api/generateと同じ。方向ごとにLLMでキャプションへ展開する。"),
+    upsample_strict: bool = Form(False, description="/api/generateと同じ。"),
+    upsampler_backend: str | None = Form(None, alias="upsampler", description="/api/generateと同じ。"),
+    shift: float | None = Form(None, description="/api/generateと同じ。"),
+):
+    """1方向ずつEditで生成する(1枚に並べる方式は左右を取り違えるため使わない)。
+
+    `left` はキャラクターが自分の左を向いた横顔(鼻が画像の右端を向く)。進捗は
+    `GET /api/charsheet/jobs/{job_id}`、停止は `POST /api/charsheet/jobs/{job_id}/cancel`。
+    """
+    try:
+        keys = charsheet.parse_views(views)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    prep = prep.strip().lower()
+    if prep not in charsheet.PREP_MODES:
+        raise HTTPException(422, "prepは auto / on / off で指定してください。")
+    if width is None and height is None and size is not None:
+        width = height = size // 32 * 32
+    width, height = width or 768, height or 1024
+    check_size_and_seed(width, height, seed)
+    try:
+        upsampler_backend = upsampler.resolve_backend(upsampler_backend)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    if shift is not None and not (1.0 <= shift <= 50.0):
+        raise HTTPException(422, "shiftは1〜50で指定してください。")
+    if not model_available(MODELS[DEFAULT_MODEL]):
+        raise HTTPException(409, f"{MODELS[DEFAULT_MODEL]['name']}は未取得です。download_models.py {DEFAULT_MODEL} を実行してください。")
+    data = await image.read(MAX_UPLOAD + 1)
+    await image.close()
+    if len(data) > MAX_UPLOAD:
+        raise HTTPException(413, "画像は10MB以内にしてください。")
+    try:
+        source = decode_reference(data, max_pixels=reference_max_pixels(1))
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    white_ratio = charsheet.white_background_ratio(source)
+    do_prep = prep == "on" or (prep == "auto" and white_ratio < charsheet.WHITE_BACKGROUND_THRESHOLD)
+    if not engine.lock.acquire(blocking=False):
+        raise HTTPException(409, "別の画像を生成しています。完了後に再試行してください。")
+    try:
+        if seed == -1:
+            seed = secrets.randbelow(2**32)
+        job_id = uuid.uuid4().hex
+        folder = charsheet_root() / job_id
+        folder.mkdir(parents=True)
+        source.save(folder / "input.png")
+        with jobs_lock:
+            for old in [k for k, v in charsheet_jobs.items() if v["status"] in FINISHED][:-49]:
+                charsheet_jobs.pop(old)  # keep the latest 50 in memory; job.json keeps the rest
+            charsheet_jobs[job_id] = {
+                "job_id": job_id, "status": "queued", "progress": 0, "total": len(keys),
+                "views": [{"key": k, "label_ja": charsheet.VIEW_BY_KEY[k]["label_ja"],
+                           "label_en": charsheet.VIEW_BY_KEY[k]["label_en"], "status": "queued", "url": None}
+                          for k in keys],
+                "sheet_url": None, "zip_url": None, "error": None,
+                "seed": seed, "width": width, "height": height, "requested_views": keys,
+                "prep": prep, "prep_applied": do_prep, "prep_status": "queued" if do_prep else "skipped",
+                "prep_url": None, "input_url": charsheet_url(job_id, "input.png"),
+                "reference_url": charsheet_url(job_id, "input.png"),
+                "white_background_ratio": round(white_ratio, 3),
+                "current": None, "step": 0, "steps": MODELS[DEFAULT_MODEL]["steps"], "message": "生成を準備しています",
+                "upsample": bool(upsample), "upsampler": upsampler_backend, "warning": None,
+                "metadata_url": charsheet_url(job_id, "metadata.json"), "created_at": time.time(),
+                "cancel": threading.Event(), "details": {},
+            }
+            response = public_charsheet(charsheet_jobs[job_id])
+        save_charsheet_state(job_id)
+        pool.submit(run_charsheet_job, job_id, source, do_prep, keys, width, height, seed, bool(upsample),
+                    bool(upsample_strict), upsampler_backend, shift)
+    except Exception:
+        engine.lock.release()
+        raise
+    return response
+
+
+@app.get("/api/charsheet/jobs/{job_id}", response_model=CharsheetJob, summary="キャラクターシートの状態",
+         responses={404: {"description": "ジョブが存在しません"}})
+def charsheet_status(job_id: str):
+    job = load_charsheet(job_id)
+    if job is None:
+        raise HTTPException(404, "ジョブが見つかりません。")
+    return job
+
+
+@app.post("/api/charsheet/jobs/{job_id}/cancel", response_model=CharsheetJob, summary="キャラクターシートを停止",
+          responses={404: {"description": "ジョブが存在しません"}})
+def charsheet_cancel(job_id: str):
+    with jobs_lock:
+        job = charsheet_jobs.get(job_id)
+        if job is not None and job["status"] not in FINISHED:
+            job["cancel"].set()
+            job["message"] = "停止を受け付けました。現在の処理が終わるまでお待ちください。"
+            return public_charsheet(job)
+    return charsheet_status(job_id)
+
+
+CHARSHEET_FILES = {"input.png", "prep.png", "sheet.png", "download.zip", "metadata.json"}
+
+
+@app.get("/api/charsheet/jobs/{job_id}/{name}", summary="キャラクターシートのファイル",
+         responses={404: {"description": "ファイルが存在しません"}})
+def charsheet_file(job_id: str, name: str):
+    """input.png / prep.png / sheet.png / download.zip / metadata.json(方向ごとのプロンプト)。"""
+    if not JOB_ID.fullmatch(job_id) or name not in CHARSHEET_FILES:
+        raise HTTPException(404, "ファイルが見つかりません。")
+    path = charsheet_root() / job_id / ("job.json" if name == "metadata.json" else name)
+    if not path.is_file():
+        raise HTTPException(404, "ファイルが見つかりません。")
+    if name == "download.zip":
+        return FileResponse(path, media_type="application/zip", filename=f"character_sheet_{job_id}.zip")
+    return FileResponse(path)
+
+
+@app.get("/api/charsheet/jobs/{job_id}/images/{key}.png", summary="方向ごとの画像",
+         responses={404: {"description": "画像が存在しません"}})
+def charsheet_view_image(job_id: str, key: str):
+    path = charsheet_root() / job_id / f"{key}.png"
+    if not JOB_ID.fullmatch(job_id) or key not in charsheet.VIEW_BY_KEY or not path.is_file():
+        raise HTTPException(404, "画像が見つかりません。")
+    return FileResponse(path, media_type="image/png")
